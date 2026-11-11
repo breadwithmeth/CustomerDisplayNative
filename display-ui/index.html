@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Customer Display — POS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- ==================== ЭКРАН ПОКУПАТЕЛЯ (16:9, вне его нет ничего) ==================== -->
+    <div id="stageWrap">
+      <div id="stage">
+
+        <!-- РЕЖИМ 2: полноэкранная реклама (WAITING) -->
+        <section class="screen" id="screenWaiting">
+          <div class="adLayers" id="waitingAdLayers"></div>
+          <header class="waTop">
+            <div class="logo"><span class="logoMark"></span><span class="logoText">МАГАЗИН</span></div>
+            <div class="waClock" id="waClock">00:00</div>
+          </header>
+          <footer class="waDots" id="waDots"></footer>
+        </section>
+
+        <!-- РЕЖИМ 1: покупка -->
+        <section class="screen" id="screenShopping">
+          <!-- левая область: чек -->
+          <div class="receiptPane">
+            <header class="rcHeader">
+              <div class="logo"><span class="logoMark"></span><span class="logoText">МАГАЗИН</span></div>
+              <div class="rcTitle">ВАША ПОКУПКА</div>
+            </header>
+
+            <div class="rcList" id="rcList"><!-- строки чека --></div>
+            <div class="rcListMask" id="rcListMask"></div>
+
+            <footer class="rcTotals">
+              <div class="rcRow">
+                <span class="rcMeta" id="rcPositions">Позиций: 0</span>
+                <span class="rcMeta rcDiscount hidden" id="rcDiscount">Скидка: 0 ₽</span>
+              </div>
+              <div class="rcDivider"></div>
+              <div class="rcTotalRow">
+                <span class="rcTotalLabel">ИТОГО</span>
+                <span class="rcTotalValue" id="rcTotal">0,00 ₽</span>
+              </div>
+            </footer>
+          </div>
+
+          <!-- правая область: реклама -->
+          <div class="adPane">
+            <div class="adLayers" id="shoppingAdLayers"></div>
+          </div>
+        </section>
+
+        <!-- РЕЖИМ: оплата -->
+        <section class="screen" id="screenPayment">
+          <div class="payCenter">
+            <div class="payLabel">К ОПЛАТЕ</div>
+            <div class="payAmount" id="payAmount">0,00 ₽</div>
+            <div class="payMethodRow">
+              <span class="payMethod" id="payMethod">Оплата картой</span>
+              <span class="paySpinner"></span>
+            </div>
+            <div class="payHint">Ожидание подтверждения терминалом…</div>
+          </div>
+        </section>
+
+        <!-- РЕЖИМ 3: завершение покупки -->
+        <section class="screen" id="screenSuccess">
+          <div class="okWrap">
+            <svg class="okCircle" viewBox="0 0 120 120" aria-hidden="true">
+              <circle class="okRing" cx="60" cy="60" r="54" />
+              <path class="okCheck" d="M36 62 L53 79 L85 44" />
+            </svg>
+            <div class="okTitle">СПАСИБО ЗА ПОКУПКУ!</div>
+            <div class="okTotal" id="okTotal">0,00 ₽</div>
+            <div class="okMeta" id="okPositions">Позиций: 0</div>
+          </div>
+        </section>
+
+        <!-- РЕЖИМ: ошибка -->
+        <section class="screen" id="screenError">
+          <div class="errWrap">
+            <div class="errBadge">!</div>
+            <div class="errTitle">ОШИБКА ОПЕРАЦИИ</div>
+            <div class="errMsg" id="errMsg">Повторите попытку.</div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+
+    <!-- ==================== ПАНЕЛЬ РАЗРАБОТЧИКА (вне экрана покупателя) ==================== -->
+    <aside id="devPanel">
+      <button id="devCollapse" title="Свернуть панель">›</button>
+      <div class="devInner">
+        <div class="devHeader">
+          <span class="devTag">DEV</span>
+          <span class="devTitle">Панель разработчика</span>
+        </div>
+
+        <div class="devState">
+          <span class="devStateLabel">Экран</span>
+          <span class="devStateValue" id="devScreen">WAITING</span>
+        </div>
+
+        <div class="devSection">
+          <div class="devCaption">Сценарий</div>
+          <div class="devRow">
+            <button class="devBtn devBtnAccent" id="btnAutoDemo">Авто-демо: вкл</button>
+          </div>
+          <div class="devRow">
+            <button class="devBtn" id="btnRunOnce">Разовый прогон</button>
+          </div>
+        </div>
+
+        <div class="devSection">
+          <div class="devCaption">Чек</div>
+          <div class="devGrid2">
+            <button class="devBtn" id="btnAddItem">+ Товар</button>
+            <button class="devBtn" id="btnAddDiscount">+ Со скидкой</button>
+            <button class="devBtn" id="btnRemoveLast">− Последний</button>
+            <button class="devBtn" id="btnClear">Очистить</button>
+          </div>
+        </div>
+
+        <div class="devSection">
+          <div class="devCaption">Оплата</div>
+          <div class="devGrid2">
+            <button class="devBtn" id="btnPayStart">Оплата начата</button>
+            <button class="devBtn devBtnGreen" id="btnPayOk">Успех</button>
+            <button class="devBtn devBtnRed" id="btnPayFail">Ошибка</button>
+          </div>
+        </div>
+
+        <div class="devSection">
+          <div class="devCaption">Реклама</div>
+          <select class="devSelect" id="devAdSelect">
+            <option value="">— авто —</option>
+            <option value="0">Product Hero</option>
+            <option value="1">Promotion</option>
+            <option value="2">Brand Campaign</option>
+            <option value="3">Video</option>
+            <option value="4">QR Promotion</option>
+          </select>
+          <div class="devRow">
+            <button class="devBtn" id="btnAdNext">Следующий ›</button>
+            <button class="devBtn" id="btnAdPause">Пауза</button>
+          </div>
+        </div>
+
+        <div class="devSection devSectionGrow">
+          <div class="devCaption">Журнал событий</div>
+          <div class="devLog" id="devLog"></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

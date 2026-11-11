@@ -1,0 +1,649 @@
+/* ============================================================
+   Customer Display — дизайн-система
+   Палитра: base #111214 · surface #1B1D20 · accent #FF6B24
+   Шрифт: Manrope (кириллица)
+   ============================================================ */
+
+:root {
+  --base: #111214;
+  --surface: #1B1D20;
+  --surface2: #222529;
+  --accent: #FF6B24;
+  --accent-soft: rgba(255, 107, 36, 0.14);
+  --ink: #FFFFFF;
+  --muted: #A1A1AA;
+  --divider: rgba(255, 255, 255, 0.08);
+  --success: #34D399;
+  --danger: #F87171;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background: #0A0B0C;
+  font-family: 'Manrope', system-ui, 'Segoe UI', sans-serif;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+button, select { font-family: inherit; }
+
+.hidden { display: none !important; }
+
+#app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* ============================ СЦЕНА 16:9 ============================ */
+
+#stageWrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background:
+    radial-gradient(1200px 600px at 50% -10%, rgba(255, 107, 36, 0.05), transparent 60%),
+    #0A0B0C;
+}
+
+/* сцена фикс. 1920×1080, масштабируется transform: scale */
+#stage {
+  width: 1920px;
+  height: 1080px;
+  position: relative;
+  overflow: hidden;
+  background: var(--base);
+  transform-origin: center center;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 40px 120px rgba(0, 0, 0, 0.55);
+}
+
+.screen {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.45s var(--ease), visibility 0.45s;
+}
+
+.screen.active {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* ============================ ЛОГОТИП ============================ */
+
+.logo { display: flex; align-items: center; gap: 14px; user-select: none; }
+.logoMark {
+  width: 26px; height: 26px; border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent) 0%, #FF8B4D 100%);
+  box-shadow: 0 4px 18px rgba(255, 107, 36, 0.35);
+}
+.logoText { font-size: 19px; font-weight: 800; letter-spacing: 0.18em; color: var(--ink); }
+
+/* ============================ РЕЖИМ 1: ПОКУПКА ============================ */
+
+#screenShopping { display: flex; }
+
+/* левая область — чек (45%) */
+.receiptPane {
+  width: 45%;
+  height: 100%;
+  background: var(--base);
+  display: flex;
+  flex-direction: column;
+  padding: 56px 60px 48px 64px;
+  position: relative;
+  z-index: 2;
+  border-right: 1px solid var(--divider);
+}
+
+.rcHeader { margin-bottom: 44px; }
+.rcHeader .logo { margin-bottom: 28px; }
+.rcTitle {
+  font-size: 27px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  color: var(--muted);
+}
+
+.rcList {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rcListMask {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: 250px;
+  height: 90px;
+  background: linear-gradient(to bottom, transparent, var(--base));
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.rcListMask.on { opacity: 1; }
+
+.rcLine {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--divider);
+  animation: lineIn 0.45s var(--ease) both;
+}
+@keyframes lineIn {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.rcLine.out {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+  opacity: 0;
+  transform: translateY(-10px);
+}
+.rcLine.flash { animation: lineFlash 0.7s var(--ease); }
+@keyframes lineFlash {
+  0% { background: var(--accent-soft); }
+  100% { background: transparent; }
+}
+
+.rcLineTop { display: flex; justify-content: space-between; align-items: baseline; gap: 24px; }
+.rcName {
+  font-size: 25px; font-weight: 700; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rcSum {
+  font-size: 25px; font-weight: 700; color: var(--ink);
+  font-feature-settings: 'tnum' 1; white-space: nowrap;
+}
+.rcLineSub {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  margin-top: 7px;
+}
+.rcQtyPrice { font-size: 17px; font-weight: 500; color: var(--muted); font-feature-settings: 'tnum' 1; }
+.rcDisc {
+  font-size: 15px; font-weight: 700; color: var(--accent);
+  background: var(--accent-soft); padding: 3px 10px; border-radius: 6px;
+  font-feature-settings: 'tnum' 1; white-space: nowrap;
+}
+
+.rcTotals { position: relative; z-index: 2; }
+.rcRow { display: flex; justify-content: space-between; margin-bottom: 18px; }
+.rcMeta { font-size: 17px; font-weight: 600; color: var(--muted); font-feature-settings: 'tnum' 1; }
+.rcDiscount { color: var(--accent); }
+.rcDivider { height: 1px; background: var(--divider); margin-bottom: 26px; }
+.rcTotalRow { display: flex; justify-content: space-between; align-items: flex-end; }
+.rcTotalLabel {
+  font-size: 19px; font-weight: 700; letter-spacing: 0.24em;
+  color: var(--muted); padding-bottom: 12px;
+}
+.rcTotalValue {
+  font-size: 68px; font-weight: 800; color: var(--accent);
+  font-feature-settings: 'tnum' 1; line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+/* правая область — реклама (55%) */
+.adPane {
+  width: 55%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+/* слои рекламы (crossfade) */
+.adLayers, .adLayerHost { position: absolute; inset: 0; }
+.adLayer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.6s var(--ease);
+  overflow: hidden;
+}
+.adLayer.show { opacity: 1; }
+
+/* ============================ ШАБЛОНЫ РЕКЛАМЫ ============================ */
+
+.ad { width: 100%; height: 100%; position: relative; display: flex; }
+
+/* плейсхолдер «фотография товара» */
+.phArt {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(420px 320px at 72% 30%, rgba(255, 107, 36, 0.22), transparent 65%),
+    linear-gradient(140deg, #1F2226 0%, var(--surface) 48%, #17191C 100%);
+}
+.phArt::before {
+  content: '';
+  position: absolute;
+  width: 46%; height: 46%;
+  right: -8%; top: -12%;
+  border: 2px solid rgba(255, 107, 36, 0.4);
+  border-radius: 50%;
+}
+.phArt::after {
+  content: '';
+  position: absolute;
+  width: 62%; height: 62%;
+  right: -14%; bottom: -22%;
+  background: radial-gradient(closest-side, rgba(255, 107, 36, 0.16), transparent);
+  filter: blur(6px);
+}
+.phTag {
+  position: absolute;
+  left: 28px; bottom: 24px;
+  font-size: 13px; font-weight: 700; letter-spacing: 0.24em;
+  color: rgba(255, 255, 255, 0.38);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 7px 14px; border-radius: 100px;
+  user-select: none;
+}
+.phCore {
+  position: absolute;
+  inset: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.phGlyph {
+  width: 34%; aspect-ratio: 1;
+  border-radius: 28px;
+  background: linear-gradient(150deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  transform: rotate(12deg);
+  position: relative;
+}
+.phGlyph::after {
+  content: '';
+  position: absolute;
+  inset: 18%;
+  border-radius: 20px;
+  background: linear-gradient(150deg, rgba(255, 107, 36, 0.5), rgba(255, 107, 36, 0.08));
+}
+
+/* A. Product Hero */
+.adProductHero { align-items: stretch; }
+.adProductHero .phArt { width: 52%; height: 100%; }
+.adProductHero .phText {
+  width: 48%;
+  display: flex; flex-direction: column; justify-content: center;
+  padding: 0 72px;
+  background: var(--base);
+  position: relative;
+}
+.adProductHero .phText::before {
+  content: '';
+  position: absolute; left: 0; top: 18%; bottom: 18%;
+  width: 2px; background: linear-gradient(to bottom, transparent, var(--accent), transparent);
+  opacity: 0.55;
+}
+.adEyebrow {
+  font-size: 16px; font-weight: 800; letter-spacing: 0.3em;
+  color: var(--accent); margin-bottom: 22px;
+}
+.adTitle { font-size: 64px; font-weight: 800; line-height: 1.04; letter-spacing: -0.01em; }
+.adDesc { font-size: 21px; font-weight: 500; color: var(--muted); line-height: 1.5; margin-top: 22px; }
+.adPriceRow { display: flex; align-items: baseline; gap: 22px; margin-top: 36px; }
+.adPrice { font-size: 56px; font-weight: 800; color: var(--accent); font-feature-settings: 'tnum' 1; }
+.adOldPrice {
+  font-size: 30px; font-weight: 600; color: var(--muted);
+  text-decoration: line-through; opacity: 0.65; font-feature-settings: 'tnum' 1;
+}
+
+/* B. Promotion */
+.adPromotion {
+  flex-direction: column;
+  align-items: center; justify-content: center;
+  background:
+    radial-gradient(700px 500px at 50% 115%, rgba(255, 107, 36, 0.2), transparent 70%),
+    var(--surface);
+  text-align: center;
+  gap: 8px;
+}
+.adPercent {
+  font-size: 250px; font-weight: 800; line-height: 0.95;
+  color: var(--accent); letter-spacing: -0.04em;
+  font-feature-settings: 'tnum' 1;
+  text-shadow: 0 0 90px rgba(255, 107, 36, 0.35);
+}
+.adPromoTitle { font-size: 52px; font-weight: 800; letter-spacing: 0.02em; }
+.adPromoSub { font-size: 22px; font-weight: 500; color: var(--muted); margin-top: 6px; }
+.adPeriod {
+  margin-top: 30px;
+  font-size: 17px; font-weight: 700; letter-spacing: 0.14em; color: var(--ink);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  padding: 10px 22px; border-radius: 100px;
+}
+
+/* C. Brand Campaign */
+.adBrand {
+  align-items: center; justify-content: center;
+  background:
+    radial-gradient(900px 600px at 22% 20%, rgba(255, 107, 36, 0.12), transparent 60%),
+    linear-gradient(160deg, #17191C, var(--base) 60%);
+}
+.adBrandArt {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(520px 520px at 78% 78%, rgba(255, 107, 36, 0.18), transparent 62%);
+}
+.adBrandArt::before {
+  content: '';
+  position: absolute; inset: 12%;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 32px;
+}
+.adBrandMark {
+  position: relative;
+  font-size: 150px; font-weight: 800; letter-spacing: 0.3em;
+  color: transparent;
+  -webkit-text-stroke: 2px rgba(255, 255, 255, 0.55);
+  padding-left: 0.3em;
+}
+.adBrandTag {
+  position: relative;
+  margin-top: 18px;
+  font-size: 22px; font-weight: 600; letter-spacing: 0.42em;
+  color: var(--muted); text-transform: uppercase;
+  padding-left: 0.42em;
+}
+.adBrandLogo {
+  position: absolute; top: 56px; left: 64px;
+  display: flex; align-items: center; gap: 12px;
+  opacity: 0.85;
+}
+
+/* D. Video Advertisement */
+.adVideo { background: #0C0D0F; }
+.adVideoArt { position: absolute; inset: -12%; }
+.adVideoArt .blob {
+  position: absolute; border-radius: 50%;
+  filter: blur(90px); opacity: 0.5;
+  animation: blobPan 14s ease-in-out infinite alternate;
+}
+.adVideoArt .blob.b1 { width: 46%; aspect-ratio: 1; background: #FF6B24; left: 6%; top: 22%; }
+.adVideoArt .blob.b2 { width: 38%; aspect-ratio: 1; background: #2D5BFF; right: 10%; bottom: 8%; animation-delay: -7s; }
+@keyframes blobPan {
+  from { transform: translate(0, 0) scale(1); }
+  to   { transform: translate(9%, -7%) scale(1.18); }
+}
+.adVideoOverlay {
+  position: absolute; inset: 0;
+  background: linear-gradient(to top, rgba(10, 11, 12, 0.72), transparent 55%);
+  display: flex; flex-direction: column; justify-content: flex-end;
+  padding: 64px 72px;
+}
+.adVideoBadge {
+  position: absolute; top: 56px; right: 64px;
+  display: flex; align-items: center; gap: 10px;
+  font-size: 14px; font-weight: 700; letter-spacing: 0.22em; color: rgba(255,255,255,0.7);
+  border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 100px;
+  padding: 8px 16px;
+  background: rgba(10, 11, 12, 0.4);
+}
+.adVideoBadge .dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+  animation: blink 1.6s ease-in-out infinite;
+}
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.adVideoTitle { font-size: 68px; font-weight: 800; }
+.adVideoSub { font-size: 22px; font-weight: 500; color: var(--muted); margin-top: 12px; }
+
+/* E. QR Promotion */
+.adQr { align-items: center; padding: 0 96px; gap: 80px; background: var(--surface); }
+.adQrText { flex: 1; }
+.adQrText .adTitle { font-size: 72px; }
+.adQrHint {
+  margin-top: 34px; display: flex; align-items: center; gap: 14px;
+  font-size: 19px; font-weight: 600; color: var(--muted);
+}
+.adQrHint .arr { color: var(--accent); font-size: 24px; }
+.adQrCard {
+  width: 430px; height: 430px; flex-shrink: 0;
+  background: #FFFFFF; border-radius: 24px;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.5);
+}
+.adQrCard svg { width: 84%; height: 84%; }
+
+/* ============================ WAITING ============================ */
+
+#screenWaiting { background: var(--base); }
+.waTop {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 52px 64px 0;
+  z-index: 5;
+}
+.waClock {
+  font-size: 24px; font-weight: 700; color: rgba(255, 255, 255, 0.55);
+  font-feature-settings: 'tnum' 1; letter-spacing: 0.06em;
+}
+.waDots {
+  position: absolute; bottom: 44px; left: 0; right: 0;
+  display: flex; justify-content: center; gap: 12px;
+  z-index: 5;
+}
+.waDot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+  transition: all 0.4s var(--ease);
+}
+.waDot.active { background: var(--accent); transform: scale(1.25); box-shadow: 0 0 14px rgba(255, 107, 36, 0.6); }
+
+/* ============================ ОПЛАТА ============================ */
+
+#screenPayment {
+  display: flex; align-items: center; justify-content: center;
+  background:
+    radial-gradient(800px 500px at 50% 120%, rgba(255, 107, 36, 0.1), transparent 65%),
+    var(--base);
+}
+.payCenter { text-align: center; }
+.payLabel {
+  font-size: 22px; font-weight: 700; letter-spacing: 0.34em; color: var(--muted);
+  margin-bottom: 26px;
+}
+.payAmount {
+  font-size: 150px; font-weight: 800; letter-spacing: -0.015em;
+  font-feature-settings: 'tnum' 1; line-height: 1;
+}
+.payMethodRow {
+  margin-top: 44px;
+  display: flex; align-items: center; justify-content: center; gap: 18px;
+}
+.payMethod { font-size: 26px; font-weight: 700; }
+.paySpinner {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 3px solid rgba(255, 107, 36, 0.2);
+  border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.payHint { margin-top: 20px; font-size: 17px; font-weight: 500; color: rgba(255, 255, 255, 0.35); }
+
+/* ============================ УСПЕХ ============================ */
+
+#screenSuccess {
+  display: flex; align-items: center; justify-content: center;
+  background:
+    radial-gradient(900px 600px at 50% 55%, rgba(52, 211, 153, 0.08), transparent 65%),
+    var(--base);
+}
+.okWrap { text-align: center; }
+.okCircle { width: 148px; height: 148px; margin: 0 auto 42px; display: block; }
+.okRing {
+  fill: rgba(52, 211, 153, 0.08);
+  stroke: var(--success); stroke-width: 3;
+  stroke-dasharray: 340; stroke-dashoffset: 340;
+  animation: ringDraw 0.7s var(--ease) forwards;
+  transform: rotate(-90deg); transform-origin: center;
+}
+@keyframes ringDraw { to { stroke-dashoffset: 0; } }
+.okCheck {
+  fill: none; stroke: var(--success); stroke-width: 8;
+  stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 80; stroke-dashoffset: 80;
+  animation: ringDraw 0.5s 0.45s var(--ease) forwards;
+}
+.okTitle { font-size: 74px; font-weight: 800; letter-spacing: 0.01em; }
+.okTotal {
+  margin-top: 30px; font-size: 48px; font-weight: 700;
+  color: var(--success); font-feature-settings: 'tnum' 1;
+}
+.okMeta { margin-top: 16px; font-size: 21px; font-weight: 600; color: var(--muted); }
+
+/* ============================ ОШИБКА ============================ */
+
+#screenError {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--base);
+}
+.errWrap { text-align: center; }
+.errBadge {
+  width: 110px; height: 110px; margin: 0 auto 36px;
+  border-radius: 50%;
+  background: rgba(248, 113, 113, 0.1);
+  border: 2px solid rgba(248, 113, 113, 0.5);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 52px; font-weight: 800; color: var(--danger);
+}
+.errTitle { font-size: 44px; font-weight: 800; letter-spacing: 0.02em; }
+.errMsg { margin-top: 18px; font-size: 22px; font-weight: 500; color: var(--muted); }
+
+/* ============================ ПАНЕЛЬ РАЗРАБОТЧИКА ============================ */
+
+#devPanel {
+  width: 340px;
+  flex-shrink: 0;
+  height: 100%;
+  background: #0E0F11;
+  border-left: 1px solid rgba(255, 255, 255, 0.07);
+  display: flex;
+  position: relative;
+  transition: width 0.3s var(--ease);
+  overflow: hidden;
+}
+#devPanel.collapsed { width: 40px; }
+
+#devCollapse {
+  position: absolute;
+  top: 14px; right: 10px;
+  width: 24px; height: 24px;
+  background: var(--surface2);
+  color: var(--muted);
+  border: none; border-radius: 6px;
+  font-size: 15px; cursor: pointer; z-index: 3;
+}
+#devCollapse:hover { color: var(--ink); background: #2A2D31; }
+#devPanel.collapsed #devCollapse { right: 7px; }
+
+.devInner {
+  width: 340px;
+  padding: 20px 20px 16px;
+  display: flex; flex-direction: column; gap: 18px;
+  height: 100%;
+  overflow-y: auto;
+}
+.devHeader { display: flex; align-items: center; gap: 10px; padding-right: 28px; }
+.devTag {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.18em;
+  color: var(--accent);
+  border: 1px solid rgba(255, 107, 36, 0.5);
+  padding: 3px 8px; border-radius: 5px;
+}
+.devTitle { font-size: 14px; font-weight: 700; color: var(--ink); }
+.devState {
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.devStateLabel { font-size: 12px; font-weight: 600; color: var(--muted); }
+.devStateValue {
+  font-size: 13px; font-weight: 800; letter-spacing: 0.08em; color: var(--accent);
+  font-feature-settings: 'tnum' 1;
+}
+.devSection { display: flex; flex-direction: column; gap: 8px; }
+.devSectionGrow { flex: 1; min-height: 120px; }
+.devCaption {
+  font-size: 11px; font-weight: 800; letter-spacing: 0.18em;
+  color: rgba(255, 255, 255, 0.35); text-transform: uppercase;
+}
+.devRow { display: flex; gap: 8px; }
+.devGrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.devBtn {
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  color: var(--ink);
+  font-size: 12.5px; font-weight: 700;
+  padding: 9px 10px; border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+.devBtn:hover { background: var(--surface2); border-color: rgba(255, 255, 255, 0.18); }
+.devBtn:active { transform: scale(0.97); }
+.devBtnAccent { background: var(--accent); border-color: var(--accent); color: #fff; }
+.devBtnAccent:hover { background: #FF7E3F; border-color: #FF7E3F; }
+.devBtnGreen { color: var(--success); border-color: rgba(52, 211, 153, 0.4); }
+.devBtnGreen:hover { background: rgba(52, 211, 153, 0.12); }
+.devBtnRed { color: var(--danger); border-color: rgba(248, 113, 113, 0.4); }
+.devBtnRed:hover { background: rgba(248, 113, 113, 0.12); }
+.devSelect {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  color: var(--ink);
+  font-size: 12.5px; font-weight: 600;
+  padding: 9px 10px; border-radius: 8px;
+  cursor: pointer;
+  outline: none;
+}
+.devLog {
+  flex: 1;
+  background: #0B0C0D;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: 'Cascadia Mono', 'Consolas', monospace;
+  font-size: 11px;
+  line-height: 1.75;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+.devLog div:first-child { color: var(--ink); }
+
+/* ============================ АДАПТИВ ШАБЛОНОВ ============================ */
+/* в правой панели режима покупки (55% ширины) типографика компактнее */
+
+.adPane .adProductHero .phArt { width: 46%; }
+.adPane .adProductHero .phText { width: 54%; padding: 0 48px; }
+.adPane .adTitle { font-size: 46px; }
+.adPane .adDesc { font-size: 18px; margin-top: 16px; }
+.adPane .adPriceRow { margin-top: 26px; gap: 16px; }
+.adPane .adPrice { font-size: 42px; }
+.adPane .adOldPrice { font-size: 24px; }
+.adPane .adEyebrow { font-size: 14px; margin-bottom: 16px; }
+.adPane .adQrText .adTitle { font-size: 52px; }
+.adPane .adQrCard { width: 350px; height: 350px; }
+.adPane .adQr { padding: 0 64px; gap: 48px; }
+.adPane .adBrandMark { font-size: 92px; }
+.adPane .adVideoTitle { font-size: 52px; }
+.adPane .adVideoSub { font-size: 18px; }
+.adPane .adPercent { font-size: 150px; }
+.adPane .adPromoTitle { font-size: 40px; }
+.adPane .adPromoSub { font-size: 18px; }
+
+/* фикс Brand Campaign: колонка, размер по ширине сцены */
+.adBrand { flex-direction: column; }
+.adBrandMark { font-size: 112px; letter-spacing: 0.2em; padding-left: 0.2em; }
+.adPane .adBrandMark { font-size: 72px; }

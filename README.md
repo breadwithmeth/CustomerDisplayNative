@@ -127,3 +127,21 @@ MANIFEST.xml / INFO.XML      — дескрипторы компоненты д�
 GPL-3.0 — компонента основана на шаблоне
 [innovait-rus/NativeAPI](https://github.com/innovait-rus/NativeAPI).
 QR-генератор — [Nayuki/QR-Code-generator](https://github.com/Nayuki/QR-Code-generator) (MIT).
+
+## Customer Display UI (веб-прототип интерфейса)
+
+Папка `display-ui/` — production-прототип интерфейса дисплея покупателя
+(16:9, база 1920×1080, дизайн-система Manrope / #111214 / #FF6B24) без сборки
+и зависимостей: чистые HTML + CSS + JS.
+
+- **Режимы**: WAITING (полноэкранная реклама) → SHOPPING (чек 45% + реклама 55%) →
+  PAYMENT → SUCCESS (4.5 с) → обратно в WAITING; есть ERROR
+- **Шаблоны рекламы**: Product Hero, Promotion (−25%), Brand Campaign,
+  Video (плейсхолдер, готов под `<video>`), QR Promotion
+- **Панель разработчика** — вне экрана покупателя: авто-демо, ручные события чека
+  и оплаты, выбор рекламного шаблона, журнал событий
+- **Мост для драйвера**: `window.__pos.dispatch({ type: 'line/upsert', line })` —
+  те же события позже будет публиковать внешняя компонента
+
+Запуск: открыть `display-ui/index.html` в браузере (двойной клик) или
+`npx serve display-ui`. Ничего собирать не нужно.
