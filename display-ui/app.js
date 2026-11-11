@@ -150,25 +150,12 @@ function applyEvent(event) {
     case 'check/item': {
       const p = splitItemLine(event.name || '')
 
-      // оплата наличными: «ВНЕСЕНО: X СДАЧА: Y» — экран оплаты, через 5 с чистим чек
+      // оплата наличными: «ВНЕСЕНО: X СДАЧА: Y» — экран оплаты;
+      // очистка чека через 5 с делает драйвер (Win32-таймер, event check/clear)
       if (p.paid !== undefined) {
         state.paidText = 'ВНЕСЕНО: ' + p.paid
         state.changeText = p.change ? 'СДАЧА: ' + p.change : ''
         state.screen = 'PAYMENT'
-        render()
-        setTimeout(() => {
-          if (state.screen === 'PAYMENT' && state.paidText === 'ВНЕСЕНО: ' + p.paid) {
-            state.lines = []
-            state.total = 0
-            state.totalText = ''
-            state.paidText = ''
-            state.changeText = ''
-            state.discountText = ''
-            state.lastTouchedId = null
-            state.screen = 'WAITING'
-            render()
-          }
-        }, 5000)
         render()
         return
       }
@@ -252,6 +239,15 @@ function applyEvent(event) {
           render()
         }
       }, 4500)
+      break
+    }
+    case 'op/paid': {
+      // наличная оплата: крупные «ВНЕСЕНО» / «СДАЧА»; чистку делает драйвер
+      state.opText = ''
+      state.paidText = event.paid || ''
+      state.changeText = event.change || ''
+      state.method = null
+      state.screen = 'PAYMENT'
       break
     }
     case 'op/show': {

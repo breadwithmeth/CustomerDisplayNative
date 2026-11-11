@@ -1621,6 +1621,19 @@ bool CustomerDisplay::mStringOutputOnCustomerDisplay(tVariant* retVal, tVariant*
                 cancel = true;
                 if (message.empty()) message = line;
             }
+            else if (low.find(L"внесено") != std::wstring::npos)
+            {
+                // наличная оплата: «ВНЕСЕНО: X СДАЧА: Y» — экран оплаты + чистка по таймеру
+                std::wstring paid = line, change;
+                const size_t sp = low.find(L"сдача");
+                if (sp != std::wstring::npos)
+                {
+                    paid = line.substr(0, sp);
+                    change = line.substr(sp);
+                }
+                events.push_back(L"{\"type\":\"op/paid\",\"paid\":\"" + JsonEscape(paid) +
+                                 L"\",\"change\":\"" + JsonEscape(change) + L"\"}");
+            }
             else if (low.find(L"оплат") != std::wstring::npos)
             {
                 // «ОПЛАТА КАРТОЙ», «ВНЕСЕНИЕ ОПЛАТЫ» и т.п. — экран оплаты

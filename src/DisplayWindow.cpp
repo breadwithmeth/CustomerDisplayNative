@@ -46,6 +46,7 @@ const wchar_t* kWindowClass = L"CustomerDisplayNativeWnd";
 constexpr UINT WM_APP_SETTINGS = WM_APP + 1;
 constexpr UINT WM_APP_CONTENT  = WM_APP + 2;
 constexpr UINT WM_APP_POS      = WM_APP + 3; // очередь JS-событий интерфейса
+constexpr UINT TIMER_PAID_CLEAR = 2;          // очистка чека после «ВНЕСЕНО»
 
 // Высоты шрифтов относительно высоты клиента (до масштаба)
 struct LayoutMetrics
@@ -1083,6 +1084,22 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 wchar_t b[128];
                 ::swprintf(b, 128, L"dispatch hr=0x%08X json=%.80s", (unsigned)hr, json.c_str());
                 WvLog(b);
+                // «ВНЕСЕНО» — наличная оплата: через 5 с очищаем чек.
+                // Таймер Win32 (не JS) — работает даже при троттлинге WebView2
+                if (json.find(L"op/paid") != std::wstring::npos)
+                    ::SetTimer(hwnd, TIMER_PAID_CLEAR, 5000, nullptr);
+            }
+        }
+        return 0;
+
+    case WM_TIMER:
+        if (wParam == TIMER_PAID_CLEAR)
+        {
+            ::KillTimer(hwnd, TIMER_PAID_CLEAR);
+            if (impl->wvReady && impl->wv)
+            {
+                impl->wv->PostWebMessageAsJson(L"{\"type\":\"check/clear\"}");
+                WvLog(L"paid timer: check/clear dispatched");
             }
         }
         return 0;
@@ -1097,6 +1114,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         ::KillTimer(hwnd, 1);
         ::KillTimer(hwnd, 2);
+        ::KillTimer(hwnd, TIMER_PAID_CLEAR);
         ::PostQuitMessage(0);
         return 0;
 
