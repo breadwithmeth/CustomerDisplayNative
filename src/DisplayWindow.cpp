@@ -1044,6 +1044,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 ::InvalidateRect(hwnd, nullptr, FALSE);
             }
         }
+        else if (wParam == TIMER_PAID_CLEAR)
+        {
+            // «ВНЕСЕНО» — наличная оплата: чистим чек (Win32-таймер работает
+            // даже при троттлинге таймеров WebView2/RDP)
+            ::KillTimer(hwnd, TIMER_PAID_CLEAR);
+            if (impl->wvReady && impl->wv)
+            {
+                impl->wv->PostWebMessageAsJson(L"{\"type\":\"check/clear\"}");
+                WvLog(L"paid timer: check/clear dispatched");
+            }
+        }
         return 0;
 
     case WM_PAINT:
@@ -1088,18 +1099,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 // Таймер Win32 (не JS) — работает даже при троттлинге WebView2
                 if (json.find(L"op/paid") != std::wstring::npos)
                     ::SetTimer(hwnd, TIMER_PAID_CLEAR, 5000, nullptr);
-            }
-        }
-        return 0;
-
-    case WM_TIMER:
-        if (wParam == TIMER_PAID_CLEAR)
-        {
-            ::KillTimer(hwnd, TIMER_PAID_CLEAR);
-            if (impl->wvReady && impl->wv)
-            {
-                impl->wv->PostWebMessageAsJson(L"{\"type\":\"check/clear\"}");
-                WvLog(L"paid timer: check/clear dispatched");
             }
         }
         return 0;
