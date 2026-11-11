@@ -633,11 +633,43 @@ void WvLog(const std::wstring& msg)
     }
 }
 
+/** Рекурсивное создание каталога (родители тоже) */
+bool EnsureDirTree(const std::wstring& path)
+{
+    if (path.empty()) return false;
+    DWORD attr = ::GetFileAttributesW(path.c_str());
+    if (attr != INVALID_FILE_ATTRIBUTES)
+        return (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    std::wstring cur;
+    size_t pos = 0;
+    while (pos < path.size())
+    {
+        size_t next = path.find_first_of(L"\\/", pos + 1);
+        if (next == std::wstring::npos) next = path.size();
+        cur = path.substr(0, next);
+        // сегмент-диск вида "C:" пропускаем (точная длина: полный путь "C:\..."
+        // тоже начинается с "C:" — его создавать нельзя пропускать)
+        if (cur.size() == 2 && cur[1] == L':') { pos = next; continue; }
+        if (!cur.empty() && ::GetFileAttributesW(cur.c_str()) == INVALID_FILE_ATTRIBUTES)
+        {
+            if (!::CreateDirectoryW(cur.c_str(), nullptr) && ::GetLastError() != ERROR_ALREADY_EXISTS)
+                return false;
+        }
+        pos = next;
+    }
+    return true;
+}
+
 /** Распаковка ресурса DLL в файл */
 bool ExtractUiResource(int resId, const std::wstring& destFile)
 {
     HRSRC hrsc = ::FindResourceW(g_hDllInstance, MAKEINTRESOURCEW(resId), RT_RCDATA);
-    if (!hrsc) return false;
+    if (!hrsc)
+    {
+        WvLog(L"  resource NOT FOUND id=" + std::to_wstring(resId) +
+              L" err=" + std::to_wstring((unsigned)::GetLastError()));
+        return false;
+    }
     HGLOBAL h = ::LoadResource(g_hDllInstance, hrsc);
     if (!h) return false;
     const void* data = ::LockResource(h);
@@ -645,7 +677,12 @@ bool ExtractUiResource(int resId, const std::wstring& destFile)
     if (!data || !size) return false;
     HANDLE f = ::CreateFileW(destFile.c_str(), GENERIC_WRITE, 0, nullptr,
                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return false;
+    if (f == INVALID_HANDLE_VALUE)
+    {
+        WvLog(L"  write FAILED " + destFile +
+              L" err=" + std::to_wstring((unsigned)::GetLastError()));
+        return false;
+    }
     DWORD written = 0;
     ::WriteFile(f, data, (DWORD)size, &written, nullptr);
     ::CloseHandle(f);
@@ -660,8 +697,7 @@ std::wstring ExtractUi(const std::wstring& baseDir)
 {
     const std::wstring ui = baseDir + L"\\ui";
     const std::wstring assets = ui + L"\\assets";
-    ::CreateDirectoryW(ui.c_str(), nullptr);
-    ::CreateDirectoryW(assets.c_str(), nullptr);
+    EnsureDirTree(assets.c_str() ? assets : ui); // создаёт и ui, и assets с родителями
 
     struct Item { int id; const wchar_t* name; };
     const Item items[] = {
