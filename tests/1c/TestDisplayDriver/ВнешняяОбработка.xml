@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExternalDataProcessor xmlns="http://v8.1c.ru/8.3/external-objects" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+	<InternalInfo>
+		<xr:ObjectType>ВнешняяОбработка</xr:ObjectType>
+		<xr:ObjectId>3e6f2a4b-8c1d-4e5f-9a0b-7c8d9e0f1a2b</xr:ObjectId>
+		<xr:ObjectVersion>8.3.24</xr:ObjectVersion>
+	</InternalInfo>
+	<Version>2.19</Version>
+	<Name>ТестДрайвераДисплея</Name>
+	<DefaultForm>ВнешняяОбработка.ТестДрайвераДисплея.Form.Форма</DefaultForm>
+	<VersionsFiles>
+		<xr:Version>8.3.24</xr:Version>
+	</VersionsFiles>
+</ExternalDataProcessor>

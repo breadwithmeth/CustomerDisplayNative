@@ -1,0 +1,4 @@
+QR Code generator library (C++), Project Nayuki — MIT License.
+Полный текст лицензии и авторские права — в шапках файлов
+qrcodegen.hpp и qrcodegen.cpp, а также на
+https://github.com/Nayuki/QR-Code-generator

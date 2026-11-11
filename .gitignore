@@ -1,0 +1,34 @@
+# Артефакты сборки
+bin/
+obj/
+.vs/
+*.user
+*.pdb
+*.exp
+*.lib
+*.iobj
+*.ipdb
+
+# Исполняемые файлы тестов
+tests/smoke/*.exe
+tests/smoke/*.obj
+tests/smoke/logtest.*
+
+# Рабочие материалы, не для публикации
+template/
+ref/
+.zcode/
+.vscode/
+Ошибка_*.zip
+*.log
+
+# Zip собирается assemble.cmd, но сам компонентный пакет можно и хранить;
+# раскомментируйте, если не хотите публиковать бинарники:
+# CustomerDisplayNative.zip
+
+# Тестовая ИБ и журналы прогона (генерируются)
+tests/1c/TestBase/
+tests/1c/convert*.txt
+tests/1c/*.log
+tests/1c/enterprise_ret.txt
+tests/1c/result.txt

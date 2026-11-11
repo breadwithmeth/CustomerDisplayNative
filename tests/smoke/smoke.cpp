@@ -1,0 +1,308 @@
+// smoke.cpp — консольный смоук-тест драйвера CustomerDisplayNative.
+// Загружает DLL напрямую (LoadLibrary), имитирует вызовы 1С и проверяет,
+// что контракт методов работает и окно дисплея появляется.
+//
+// Запуск: smoke.exe <путь к CustomerDisplayNative_64.dll>
+#include "stdafx.h"
+#include "ComponentBase.h"
+#include "AddInDefBase.h"
+#include "IMemoryManager.h"
+
+#include <stdio.h>
+#include <string>
+#include <vector>
+
+// ---- фейковый менеджер памяти (как 1С) ----
+class FakeMemoryManager : public IMemoryManager
+{
+public:
+    virtual bool ADDIN_API AllocMemory(void** pMemory, unsigned long ulCountByte)
+    {
+        *pMemory = ::malloc(ulCountByte);
+        return *pMemory != nullptr;
+    }
+    virtual void ADDIN_API FreeMemory(void** pMemory)
+    {
+        if (pMemory && *pMemory) { ::free(*pMemory); *pMemory = nullptr; }
+    }
+};
+
+// ---- экспортируемые типы DLL ----
+typedef long (*TGetClassObject)(const WCHAR_T*, IComponentBase**);
+typedef AppCapabilities (*TSetPlatformCapabilities)(AppCapabilities);
+typedef long (*TDestroyObject)(IComponentBase**);
+typedef const WCHAR_T* (*TGetClassNames)();
+
+static int g_failures = 0;
+
+#define CHECK(cond, msg) \
+    do { if (cond) { printf("  [OK]   %s\n", msg); } \
+         else { printf("  [FAIL] %s\n", msg); ++g_failures; } } while (0)
+
+static std::wstring OutStr(tVariant* v)
+{
+    if (!v || TV_VT(v) != VTYPE_PWSTR || !TV_WSTR(v))
+        return L"<empty>";
+    return std::wstring((wchar_t*)TV_WSTR(v), v->wstrLen);
+}
+
+// ВНИМАНИЕ: строки должны жить дольше вызова — передаём литералы/долгоживущие буферы
+static void SetInStr(tVariant* v, const wchar_t* s)
+{
+    TV_VT(v) = VTYPE_PWSTR;
+    TV_WSTR(v) = (WCHAR_T*)s;
+    v->wstrLen = (uint32_t)::wcslen(s);
+}
+
+static void SetInLong(tVariant* v, long val)
+{
+    TV_VT(v) = VTYPE_I4;
+    TV_I4(v) = val;
+}
+
+static void PrintLast(IComponentBase* comp)
+{
+    tVariant errOut; memset(&errOut, 0, sizeof(errOut));
+    tVariant errRet; memset(&errRet, 0, sizeof(errRet));
+    comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"GetLastError"), &errRet, &errOut, 1);
+    std::wstring text = OutStr(&errOut);
+    if (!text.empty())
+    {
+        char buf[1024] = { 0 };
+        ::WideCharToMultiByte(CP_OEMCP, 0, text.c_str(), -1, buf, sizeof(buf) - 1, "?", nullptr);
+        printf("         ошибка(%ld): %s\n", TV_I4(&errRet), buf);
+    }
+}
+
+static void PrintXml(const std::wstring& xml, size_t maxLen = 220)
+{
+    std::wstring s = xml;
+    if (s.size() > maxLen) s = s.substr(0, maxLen) + L"...";
+    // переводим в консольную кодировку
+    char buf[1024] = { 0 };
+    ::WideCharToMultiByte(CP_OEMCP, 0, s.c_str(), -1, buf, sizeof(buf) - 1, "?", nullptr);
+    printf("         %s\n", buf);
+}
+
+// Поиск окна дисплея ТОЛЬКО текущего процесса (в системе может быть
+// несколько экземпляров — например, окно из сеанса 1С пользователя)
+static HWND FindOwnDisplayWindow()
+{
+    struct Ctx { DWORD pid; HWND hwnd; } ctx;
+    ctx.pid = ::GetCurrentProcessId();
+    ctx.hwnd = nullptr;
+    EnumWindows([](HWND h, LPARAM lp) -> BOOL {
+        auto* c = (Ctx*)lp;
+        wchar_t cls[64] = { 0 };
+        ::GetClassNameW(h, cls, 64);
+        if (wcscmp(cls, L"CustomerDisplayNativeWnd") == 0)
+        {
+            DWORD pid = 0;
+            ::GetWindowThreadProcessId(h, &pid);
+            if (pid == c->pid) { c->hwnd = h; return FALSE; }
+        }
+        return TRUE;
+    }, (LPARAM)&ctx);
+    return ctx.hwnd;
+}
+
+int main(int argc, char** argv)
+{
+    const char* dllPath = (argc > 1) ? argv[1] : "CustomerDisplayNative_64.dll";
+
+    printf("Смоук-тест CustomerDisplayNative: %s\n\n", dllPath);
+
+    HMODULE dll = ::LoadLibraryA(dllPath);
+    CHECK(dll != nullptr, "LoadLibrary");
+    if (!dll)
+    {
+        printf("GetLastError=%u\n", ::GetLastError());
+        return 2;
+    }
+
+    TGetClassObject getClassObject = (TGetClassObject)::GetProcAddress(dll, "GetClassObject");
+    TSetPlatformCapabilities setCaps = (TSetPlatformCapabilities)::GetProcAddress(dll, "SetPlatformCapabilities");
+    TDestroyObject destroyObject = (TDestroyObject)::GetProcAddress(dll, "DestroyObject");
+    TGetClassNames getClassNames = (TGetClassNames)::GetProcAddress(dll, "GetClassNames");
+    CHECK(getClassObject && setCaps && destroyObject && getClassNames, "экспорты GetClassObject/SetPlatformCapabilities/DestroyObject/GetClassNames");
+
+    setCaps(eAppCapabilities1);
+    std::wstring classNames((wchar_t*)getClassNames());
+    printf("  Класс компоненты: %ls\n", classNames.c_str());
+    CHECK(_wcsicmp(classNames.c_str(), L"CustomerDisplay") == 0, "имя класса = CustomerDisplay");
+
+    IComponentBase* comp = nullptr;
+    getClassObject((const WCHAR_T*)L"CustomerDisplay", &comp);
+    CHECK(comp != nullptr, "GetClassObject создал компоненту");
+
+    FakeMemoryManager memMgr;
+    CHECK(comp->setMemManager(&memMgr), "setMemManager");
+    CHECK(comp->Init(nullptr) == true, "Init(nullptr) tolerated");
+    CHECK(comp->GetInfo() == 2005, "GetInfo == 2005 (как в рабочих драйверах InnovaIT)");
+
+    // Регистрация имён методов (RU и EN)
+    CHECK(comp->FindMethod((const WCHAR_T*)L"ConnectEquipment") >= 0, "FindMethod(ConnectEquipment)");
+    CHECK(comp->FindMethod((const WCHAR_T*)L"ПодключитьОборудование") >= 0, "FindMethod(ПодключитьОборудование)");
+    CHECK(comp->FindMethod((const WCHAR_T*)L"StringOutputOnCustomerDisplay") >= 0, "FindMethod(StringOutputOnCustomerDisplay)");
+    CHECK(comp->FindMethod((const WCHAR_T*)L"ВывестиСтрокиНаДисплейПокупателя") >= 0, "FindMethod(ВывестиСтрокиНаДисплейПокупателя)");
+    CHECK(comp->FindMethod((const WCHAR_T*)L"GetCustomerDisplayOptions") >= 0, "FindMethod(GetCustomerDisplayOptions)");
+
+    tVariant ret; memset(&ret, 0, sizeof(ret));
+
+    // --- GetDescription ---
+    {
+        tVariant out; memset(&out, 0, sizeof(out));
+        bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"GetDescription"), &ret, &out, 1);
+        CHECK(ok && TV_BOOL(&ret), "GetDescription -> true");
+        std::wstring xml = OutStr(&out);
+        printf("  DriverDescription: %u байт\n", (unsigned)xml.size());
+        CHECK(xml.find(L"CustomerDisplay") != std::wstring::npos, "XML содержит CustomerDisplay");
+        PrintXml(xml);
+    }
+
+    // --- GetLastError (пустая) ---
+    {
+        tVariant out; memset(&out, 0, sizeof(out));
+        comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"GetLastError"), &ret, &out, 1);
+        CHECK(TV_I4(&ret) == 0, "GetLastError код = 0 после успеха");
+    }
+
+    // --- EquipmentParameters ---
+    {
+        tVariant params[2]; memset(params, 0, sizeof(params));
+        SetInStr(&params[0], L"CustomerDisplay");
+        bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"EquipmentParameters"), &ret, params, 2);
+        CHECK(ok && TV_BOOL(&ret), "EquipmentParameters -> true");
+        std::wstring xml = OutStr(&params[1]);
+        CHECK(xml.find(L"MonitorIndex") != std::wstring::npos, "TableParameters содержит MonitorIndex");
+        PrintXml(xml);
+    }
+
+    // --- GetCustomerDisplayOptions на неизвестном ID -> ленивое создание, затем отключение ---
+    {
+        tVariant params[2]; memset(params, 0, sizeof(params));
+        SetInStr(&params[0], L"{lazy-device}");
+        comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"GetCustomerDisplayOptions"), &ret, params, 2);
+        CHECK(TV_BOOL(&ret), "GetCustomerDisplayOptions(неизвестный ID) -> ленивое создание");
+        // убираем лениво созданное устройство, чтобы не осталось лишнего окна
+        tVariant disc[1]; memset(disc, 0, sizeof(disc));
+        SetInStr(&disc[0], L"{lazy-device}");
+        comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"DisconnectEquipment"), &ret, disc, 1);
+    }
+
+    // --- ConnectEquipment: окно на мониторе 1 ---
+    std::wstring deviceId;
+    {
+        tVariant params[3]; memset(params, 0, sizeof(params));
+        SetInStr(&params[1], L"CustomerDisplay");
+        SetInStr(&params[2],
+            L"<Parameters>"
+            L"<Parameter Name=\"MonitorIndex\" Value=\"1\"/>"
+            L"<Parameter Name=\"Fullscreen\" Value=\"true\"/>"
+            L"</Parameters>");
+        bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"ConnectEquipment"), &ret, params, 3);
+        CHECK(ok && TV_BOOL(&ret), "ConnectEquipment -> true");
+        if (!ok || !TV_BOOL(&ret))
+            PrintLast(comp);
+        deviceId = OutStr(&params[0]);
+        printf("  DeviceID: %ls\n", deviceId.c_str());
+        CHECK(deviceId.find(L"{") != std::wstring::npos, "DeviceID (GUID) возвращён");
+
+        ::Sleep(1500);
+        HWND wnd = FindOwnDisplayWindow();
+        CHECK(wnd != nullptr && ::IsWindowVisible(wnd), "окно дисплея создано и видимо");
+        RECT rc; if (wnd) { ::GetWindowRect(wnd, &rc); printf("  окно: %ldx%ld @ (%ld,%ld)\n", rc.right - rc.left, rc.bottom - rc.top, rc.left, rc.top); }
+    }
+
+    // --- StringOutputOnCustomerDisplay ---
+    {
+        tVariant params[2]; memset(params, 0, sizeof(params));
+        SetInStr(&params[0], deviceId.c_str());
+        SetInStr(&params[1],
+            L"<Strings>"
+            L"<String>Молоко «Простоквашино» 3,2% | 89,00</String>"
+            L"<String>Хлеб «Бородинский» | 54,50</String>"
+            L"<String>ИТОГО | 143,50</String>"
+            L"</Strings>");
+        bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"StringOutputOnCustomerDisplay"), &ret, params, 2);
+        CHECK(ok && TV_BOOL(&ret), "StringOutputOnCustomerDisplay -> true");
+        ::Sleep(800);
+    }
+
+    // --- QRCodeOutputOnCustomerDisplay (генерация из значения) ---
+    {
+        tVariant params[3]; memset(params, 0, sizeof(params));
+        SetInStr(&params[0], deviceId.c_str());
+        SetInStr(&params[1], L"https://example.com/pay/143.50");
+        bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"QRCodeOutputOnCustomerDisplay"), &ret, params, 3);
+        CHECK(ok && TV_BOOL(&ret), "QRCodeOutputOnCustomerDisplay -> true");
+        ::Sleep(800);
+    }
+
+    // --- DisplayOperationStatus(2) ---
+    {
+        tVariant params[2]; memset(params, 0, sizeof(params));
+        SetInStr(&params[0], deviceId.c_str());
+        SetInLong(&params[1], 2);
+        bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"DisplayOperationStatus"), &ret, params, 2);
+        CHECK(ok && TV_BOOL(&ret), "DisplayOperationStatus(2) -> true");
+        ::Sleep(800);
+    }
+
+    // --- DisplayWorkplaceStatus(1) со звуком ---
+    {
+        tVariant params[3]; memset(params, 0, sizeof(params));
+        SetInStr(&params[0], deviceId.c_str());
+        SetInLong(&params[1], 1);
+        SetInLong(&params[2], 1);
+        bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"DisplayWorkplaceStatus"), &ret, params, 3);
+        CHECK(ok && TV_BOOL(&ret), "DisplayWorkplaceStatus(1, звук) -> true");
+        ::Sleep(800);
+    }
+
+    // --- GetCustomerDisplayOptions на подключённом ---
+    {
+        tVariant params[2]; memset(params, 0, sizeof(params));
+        SetInStr(&params[0], deviceId.c_str());
+        bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"GetCustomerDisplayOptions"), &ret, params, 2);
+        CHECK(ok && TV_BOOL(&ret), "GetCustomerDisplayOptions -> true");
+        std::wstring xml = OutStr(&params[1]);
+        CHECK(xml.find(L"DisplayQRCode=\"true\"") != std::wstring::npos, "опции: DisplayQRCode=true");
+        PrintXml(xml);
+    }
+
+    // --- EquipmentTest (демо на подключённом устройстве) ---
+    {
+        tVariant params[3]; memset(params, 0, sizeof(params));
+        SetInStr(&params[0], L"CustomerDisplay");
+        bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"EquipmentTest"), &ret, params, 3);
+        CHECK(ok && TV_BOOL(&ret), "EquipmentTest -> true");
+        ::Sleep(1200);
+    }
+
+    // --- DisconnectEquipment ---
+    {
+        tVariant params[1]; memset(params, 0, sizeof(params));
+        SetInStr(&params[0], deviceId.c_str());
+        bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"DisconnectEquipment"), &ret, params, 1);
+        CHECK(ok && TV_BOOL(&ret), "DisconnectEquipment -> true");
+        ::Sleep(500);
+        HWND wnd = FindOwnDisplayWindow();
+        CHECK(wnd == nullptr || !::IsWindowVisible(wnd), "окно дисплея закрыто");
+    }
+
+    // --- Вывод HTML должен быть отклонён ---
+    {
+        tVariant params[2]; memset(params, 0, sizeof(params));
+        SetInStr(&params[0], deviceId.c_str());
+        SetInStr(&params[1], L"PGh0bWw+PC9odG1sPg==");
+        comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"OutputHTML"), &ret, params, 2);
+        CHECK(!TV_BOOL(&ret), "OutputHTML -> false (не поддерживается)");
+    }
+
+    destroyObject(&comp);
+    ::FreeLibrary(dll);
+
+    printf("\nИтог: %s (%d ошибок)\n", g_failures == 0 ? "УСПЕХ" : "ЕСТЬ ОШИБКИ", g_failures);
+    return g_failures == 0 ? 0 : 1;
+}

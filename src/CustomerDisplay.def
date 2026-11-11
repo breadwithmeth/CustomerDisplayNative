@@ -1,0 +1,7 @@
+; Имя LIBRARY не указываем сознательно: линкер подставляет реальное имя
+; выходного файла (CustomerDisplayNative_32.dll / _64.dll)
+EXPORTS
+GetClassObject
+DestroyObject
+GetClassNames
+SetPlatformCapabilities
