@@ -111,5 +111,8 @@
   <ItemGroup>
     <None Include="src\CustomerDisplay.def" />
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="CustomerDisplayResources.rc" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

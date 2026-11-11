@@ -1,0 +1,10 @@
+// Ресурсы интерфейса покупателя (распаковываются во временную папку при старте)
+// Идентификаторы 201..207, тип RCDATA
+
+201 RCDATA "display-ui\\index.html"
+202 RCDATA "display-ui\\styles.css"
+203 RCDATA "display-ui\\app.js"
+204 RCDATA "display-ui\\assets\\ad1.jpg"
+205 RCDATA "display-ui\\assets\\ad1_full.jpg"
+206 RCDATA "display-ui\\assets\\ad2.jpg"
+207 RCDATA "display-ui\\assets\\ad2_full.jpg"

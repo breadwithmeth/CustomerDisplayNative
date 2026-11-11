@@ -633,6 +633,60 @@ void WvLog(const std::wstring& msg)
     }
 }
 
+/** Распаковка ресурса DLL в файл */
+bool ExtractUiResource(int resId, const std::wstring& destFile)
+{
+    HRSRC hrsc = ::FindResourceW(g_hDllInstance, MAKEINTRESOURCEW(resId), RT_RCDATA);
+    if (!hrsc) return false;
+    HGLOBAL h = ::LoadResource(g_hDllInstance, hrsc);
+    if (!h) return false;
+    const void* data = ::LockResource(h);
+    const SIZE_T size = ::SizeofResource(g_hDllInstance, hrsc);
+    if (!data || !size) return false;
+    HANDLE f = ::CreateFileW(destFile.c_str(), GENERIC_WRITE, 0, nullptr,
+                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    ::WriteFile(f, data, (DWORD)size, &written, nullptr);
+    ::CloseHandle(f);
+    return written == size;
+}
+
+/** Распаковка интерфейса покупателя из ресурсов DLL во временную папку.
+    Возвращает папку для виртуального хоста (пусто при неудаче).
+    Ресурсы — единственный надёжный источник: 1С распаковывает zip компоненты
+    без гарантии сохранения подпапок рядом с DLL. */
+std::wstring ExtractUi(const std::wstring& baseDir)
+{
+    const std::wstring ui = baseDir + L"\\ui";
+    const std::wstring assets = ui + L"\\assets";
+    ::CreateDirectoryW(ui.c_str(), nullptr);
+    ::CreateDirectoryW(assets.c_str(), nullptr);
+
+    struct Item { int id; const wchar_t* name; };
+    const Item items[] = {
+        { 201, L"index.html" },   { 202, L"styles.css" }, { 203, L"app.js" },
+        { 204, L"assets\\ad1.jpg" },      { 205, L"assets\\ad1_full.jpg" },
+        { 206, L"assets\\ad2.jpg" },      { 207, L"assets\\ad2_full.jpg" },
+    };
+    bool allOk = true;
+    for (const Item& it : items)
+        if (!ExtractUiResource(it.id, ui + L"\\" + it.name))
+        {
+            WvLog(L"extract FAILED: " + std::wstring(it.name));
+            allOk = false;
+        }
+    // индекс обязан быть
+    if (!allOk)
+    {
+        DWORD attr = ::GetFileAttributesW((ui + L"\\index.html").c_str());
+        if (attr == INVALID_FILE_ATTRIBUTES)
+            return std::wstring();
+    }
+    WvLog(L"ui extracted to " + ui);
+    return ui;
+}
+
 void FlushPendingJs(Impl* impl)
 {
     if (!impl->wv)
@@ -669,19 +723,28 @@ HRESULT AttachWebview(Impl* impl, ICoreWebView2Controller* ctrl)
         if (SUCCEEDED(st->QueryInterface(IID_PPV_ARGS(&st3))) && st3)
             st3->put_AreBrowserAcceleratorKeysEnabled(FALSE);
     }
-    // маппинг виртуальных хостов — ICoreWebView2_3
-    ComPtr<ICoreWebView2_3> wv3;
-    if (SUCCEEDED(wv->QueryInterface(IID_PPV_ARGS(&wv3))) && wv3)
-    {
-        wv3->SetVirtualHostNameToFolderMapping(
-            L"app.customer", impl->uiFolder.c_str(),
-            COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
-        if (!impl->mediaDir.empty())
-            wv3->SetVirtualHostNameToFolderMapping(
-                L"app.media", impl->mediaDir.c_str(),
-                COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
-        WvLog(L"virtual hosts mapped");
-    }
+                            // маппинг виртуальных хостов — ICoreWebView2_3
+                            ComPtr<ICoreWebView2_3> wv3;
+                            if (SUCCEEDED(wv->QueryInterface(IID_PPV_ARGS(&wv3))) && wv3)
+                            {
+                                HRESULT hm = wv3->SetVirtualHostNameToFolderMapping(
+                                    L"app.customer", impl->uiFolder.c_str(),
+                                    COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+                                WvLog(SUCCEEDED(hm) ? L"map app.customer OK"
+                                                    : (L"map app.customer FAILED hr=0x" + [&] { wchar_t b[16]; ::swprintf(b, 16, L"%08X", (unsigned)hm); return std::wstring(b); }()));
+                                if (!impl->mediaDir.empty())
+                                {
+                                    HRESULT hm2 = wv3->SetVirtualHostNameToFolderMapping(
+                                        L"app.media", impl->mediaDir.c_str(),
+                                        COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+                                    WvLog(SUCCEEDED(hm2) ? L"map app.media OK"
+                                                         : L"map app.media FAILED");
+                                }
+                            }
+                            else
+                            {
+                                WvLog(L"ICoreWebView2_3 not available");
+                            }
     RECT rc;
     ::GetClientRect(impl->hwnd, &rc);
     impl->wvController->put_Bounds(rc);
@@ -702,7 +765,7 @@ HRESULT AttachWebview(Impl* impl, ICoreWebView2Controller* ctrl)
 
 void StartWebView2(Impl* impl)
 {
-    WvLog(L"StartWebView2: begin, uiFolder=" + impl->uiFolder);
+    WvLog(L"StartWebView2: begin");
     // рантайм WebView2 установлен?
     LPWSTR ver = nullptr;
     HRESULT hr = ::GetAvailableCoreWebView2BrowserVersionString(nullptr, &ver);
@@ -716,6 +779,22 @@ void StartWebView2(Impl* impl)
     std::wstring verStr = ver;
     ::CoTaskMemFree(ver);
     WvLog(L"StartWebView2: runtime " + verStr);
+
+    // интерфейс покупателя: распаковка из ресурсов DLL (надёжнее файлов рядом с DLL)
+    impl->uiFolder = ExtractUi(impl->userDataDir);
+    if (impl->uiFolder.empty())
+    {
+        impl->gdiFallback = true;
+        WvLog(L"StartWebView2: ui extract FAILED — GDI fallback");
+        return;
+    }
+    DWORD uiAttr = ::GetFileAttributesW(impl->uiFolder.c_str());
+    if (uiAttr == INVALID_FILE_ATTRIBUTES)
+    {
+        impl->gdiFallback = true;
+        WvLog(L"StartWebView2: ui folder missing — GDI fallback");
+        return;
+    }
 
     auto opts = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
     hr = ::CreateCoreWebView2EnvironmentWithOptions(
