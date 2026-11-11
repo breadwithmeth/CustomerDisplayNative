@@ -12,7 +12,7 @@
 // Регистрация компоненты
 static const wchar_t g_kClassNames[] = L"CustomerDisplay";
 static const wchar_t* g_extensionName = L"CustomerDisplayNative";
-static const wchar_t* g_extensionVersion = L"1.1.1.0";
+static const wchar_t* g_extensionVersion = L"1.1.1.1";
 static const wchar_t* g_driverName = L"Дисплей покупателя (монитор)";
 static const wchar_t* g_driverDescription =
     L"Вывод информации на дисплей покупателя. В качестве дисплея используется "
@@ -1620,6 +1620,11 @@ bool CustomerDisplay::mStringOutputOnCustomerDisplay(tVariant* retVal, tVariant*
             {
                 cancel = true;
                 if (message.empty()) message = line;
+            }
+            else if (low.find(L"оплат") != std::wstring::npos)
+            {
+                // «ОПЛАТА КАРТОЙ», «ВНЕСЕНИЕ ОПЛАТЫ» и т.п. — экран оплаты
+                events.push_back(L"{\"type\":\"op/show\",\"text\":\"" + JsonEscape(line) + L"\"}");
             }
             else if (low.find(L"итог") != std::wstring::npos)
             {

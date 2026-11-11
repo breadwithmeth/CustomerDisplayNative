@@ -48,6 +48,7 @@ const state = {
   discountText: '',    // скидка строкой (из драйвера)
   lastTouchedId: null, // позиция для «N×цена = сумма»
   method: null,        // 'card' | 'cash'
+  opText: '',          // текст строки оплаты из РМК
   success: null,       // { total, positions }
   error: null,
   message: null,       // текст сообщения (приветствие/простой/отмена)
@@ -194,6 +195,14 @@ function applyEvent(event) {
           render()
         }
       }, 4500)
+      break
+    }
+    case 'op/show': {
+      // строка оплаты из РМК («ОПЛАТА КАРТОЙ», «ВНЕСЕНИЕ ОПЛАТЫ»…) —
+      // экран PAYMENT с текущим итогом и текстом
+      state.opText = event.text || ''
+      state.method = null
+      state.screen = 'PAYMENT'
       break
     }
     case 'op/status': {
@@ -455,8 +464,18 @@ let payTotalShown = 0
 
 function renderPayment() {
   if (state.screen !== 'PAYMENT') return
-  animateNumber($('payAmount'), state.total)
-  $('payMethod').textContent = state.method === 'cash' ? 'Оплата наличными' : 'Оплата картой'
+  const el = $('payAmount')
+  if (state.totalText) {
+    // итог строкой из драйвера — гасим анимацию
+    const prev = numAnims.get(el)
+    if (prev) { cancelAnimationFrame(prev.raf); numAnims.delete(el) }
+    if (el.textContent !== state.totalText) el.textContent = state.totalText
+  } else {
+    animateNumber(el, state.total)
+  }
+  $('payMethod').textContent =
+    state.opText ||
+    (state.method === 'cash' ? 'Оплата наличными' : 'Оплата картой')
 }
 
 function renderSuccess() {
