@@ -16,10 +16,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const fmtMoney = (v) =>
   new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v) + ' ₸'
 
-/** Из строки БПО «Наименование 1 050,00 тг.» выделяет наименование и сумму */
+/** Из строки БПО выделяет структуру:
+    «Наименование 1 050,00 тг.»        → { name, sum }
+    «2x1 050,00 тг.=2 100,00 тг.»      → { qtyUpdate: {qty, price, total} }
+    «СКИДКА: 1110,00»                  → { discount: '1110,00' }
+    «1 110,00 тг.» (только сумма)      → { name: '', sum } — игнорируется выше */
 function splitItemLine(line) {
+  // qty-формат: «N×цена = сумма» (разделители тысяч/пробелы/валюта)
+  const q = line.match(/^\s*(\d+)\s*[x×]\s*(\d[\d\s\u00A0]*[.,]\d{2})\s*(?:тг|₸|₽|тенге)?\.?\s*=\s*(\d[\d\s\u00A0]*[.,]\d{2})\s*(?:тг|₸|₽|тенге)?\.?\s*$/i)
+  if (q) {
+    return { qtyUpdate: { qty: parseInt(q[1], 10), price: q[2].trim(), total: q[3].trim() } }
+  }
+  // скидка
+  const d = line.match(/^\s*скидка\s*:?\s*(.*)$/i)
+  if (d) return { discount: d[1].trim() }
+  // «имя … сумма» — сумма в конце строки
   const m = line.match(/^(.*?)[\s\u00A0]*((?:\d[\d\s\u00A0]*[.,]\d{2})\s*(?:тг|₸|₽|тенге)?\.?)\s*$/i)
-  if (m && m[1].trim()) return { name: m[1].replace(/[|\-–—]\s*$/, '').trim(), sum: m[2].trim() }
+  if (m && m[1].trim()) return { name: m[1].replace(/[-=]\s*$/, '').trim(), sum: m[2].trim() }
   return { name: line.trim(), sum: '' }
 }
 
@@ -29,9 +42,11 @@ let itemSeq = 0
 
 const state = {
   screen: 'WAITING',   // WAITING | SHOPPING | PAYMENT | SUCCESS | ERROR | QR | MEDIA | MESSAGE
-  lines: [],           // { id, name, qty, unitPrice, discount, lineTotal, sumText? }
+  lines: [],           // { id, name, qty, unitPrice, discount, lineTotal, sumText?, qtyText? }
   total: 0,
   totalText: '',       // итог строкой (из драйвера), приоритетнее total
+  discountText: '',    // скидка строкой (из драйвера)
+  lastTouchedId: null, // позиция для «N×цена = сумма»
   method: null,        // 'card' | 'cash'
   success: null,       // { total, positions }
   error: null,
@@ -84,6 +99,8 @@ function applyEvent(event) {
       state.lines = []
       state.total = 0
       state.totalText = ''
+      state.discountText = ''
+      state.lastTouchedId = null
       state.screen = 'WAITING'
       break
     }
@@ -115,17 +132,49 @@ function applyEvent(event) {
     // ---- события из драйвера (WebView2-интеграция) ----
     case 'check/item': {
       if (state.screen === 'PAYMENT' || state.screen === 'SUCCESS') return
-      const split = splitItemLine(event.name || '')
-      if (!split.name) return
-      // дубликат последней строки пропускаем (БПО может пересылать)
-      const last = state.lines[state.lines.length - 1]
-      if (last && last.name === split.name && (last.sumText || '') === split.sum) return
+      const p = splitItemLine(event.name || '')
+
+      // «N×цена = сумма» — обновление количества у последней активной позиции
+      if (p.qtyUpdate) {
+        const target = state.lines.find((l) => l.id === state.lastTouchedId) ||
+                       state.lines[state.lines.length - 1]
+        if (target) {
+          target.qty = p.qtyUpdate.qty
+          target.qtyText = p.qtyUpdate.qty + '×' + p.qtyUpdate.price
+          target.sumText = p.qtyUpdate.total
+          state.screen = 'SHOPPING'
+        }
+        return
+      }
+
+      // скидка
+      if (p.discount !== undefined) {
+        state.discountText = p.discount || ''
+        state.screen = 'SHOPPING'
+        return
+      }
+
+      const name = p.name
+      if (!name || (!p.sum && !state.lines.some((l) => l.name === name))) return
+
+      // сумма 0,00 при уже известной позиции — шум пересчёта, игнорируем
+      const existing = state.lines.find((l) => l.name === name)
+      if (existing) {
+        if (p.sum && p.sum !== '0,00 ₸' && p.sum !== '0.00 ₸') {
+          existing.sumText = p.sum
+          state.lastTouchedId = existing.id
+          state.screen = 'SHOPPING'
+        }
+        return
+      }
+
       state.lines.push({
         id: 'i' + (++itemSeq) + '-' + Date.now(),
-        name: split.name,
+        name,
         qty: null, unitPrice: null, discount: null, lineTotal: null,
-        sumText: split.sum,
+        sumText: p.sum,
       })
+      state.lastTouchedId = state.lines[state.lines.length - 1].id
       state.screen = 'SHOPPING'
       break
     }
@@ -345,7 +394,10 @@ function renderReceipt() {
       void node.offsetWidth // reflow для перезапуска анимации
       node.classList.add('flash')
     }
-    if (line.qty) {
+    if (line.qtyText) {
+      qp.textContent = line.qtyText
+      qp.classList.remove('hidden')
+    } else if (line.qty) {
       qp.textContent = `${line.qty} шт × ${fmtMoney(line.unitPrice)}`
       qp.classList.remove('hidden')
     } else {
@@ -382,13 +434,18 @@ function renderTotals() {
     animateNumber($('rcTotal'), state.total)
   }
   $('rcPositions').textContent = 'Позиций: ' + state.lines.length
-  const numericDiscount = state.lines.reduce((s, l) => s + (l.discount || 0), 0)
   const d = $('rcDiscount')
-  if (numericDiscount > 0) {
-    d.textContent = 'Скидка: ' + fmtMoney(numericDiscount)
+  if (state.discountText) {
+    d.textContent = 'Скидка: ' + state.discountText
     d.classList.remove('hidden')
   } else {
-    d.classList.add('hidden')
+    const numericDiscount = state.lines.reduce((s, l) => s + (l.discount || 0), 0)
+    if (numericDiscount > 0) {
+      d.textContent = 'Скидка: ' + fmtMoney(numericDiscount)
+      d.classList.remove('hidden')
+    } else {
+      d.classList.add('hidden')
+    }
   }
 }
 
