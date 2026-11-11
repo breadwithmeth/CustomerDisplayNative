@@ -66,6 +66,8 @@ const state = {
   success: null,       // { total, positions }
   error: null,
   message: null,       // текст сообщения (приветствие/простой/отмена)
+  paidText: '',        // «ВНЕСЕНО: X» при наличной оплате
+  changeText: '',      // «СДАЧА: Y» при наличной оплате
   qrDataUrl: null,     // data:image/png;base64,... (QR-оплата из драйвера)
   mediaUrl: null,      // url медиафайла (реклама из драйвера)
 }
@@ -146,15 +148,32 @@ function applyEvent(event) {
     }
     // ---- события из драйвера (WebView2-интеграция) ----
     case 'check/item': {
-      if (state.screen === 'PAYMENT' || state.screen === 'SUCCESS') return
       const p = splitItemLine(event.name || '')
 
-      // оплата наличными: «ВНЕСЕНО: X СДАЧА: Y»
+      // оплата наличными: «ВНЕСЕНО: X СДАЧА: Y» — экран оплаты, через 5 с чистим чек
       if (p.paid !== undefined) {
-        state.opText = 'Внесено: ' + p.paid + (p.change ? '  ·  Сдача: ' + p.change : '')
+        state.paidText = 'ВНЕСЕНО: ' + p.paid
+        state.changeText = p.change ? 'СДАЧА: ' + p.change : ''
         state.screen = 'PAYMENT'
+        render()
+        setTimeout(() => {
+          if (state.screen === 'PAYMENT' && state.paidText === 'ВНЕСЕНО: ' + p.paid) {
+            state.lines = []
+            state.total = 0
+            state.totalText = ''
+            state.paidText = ''
+            state.changeText = ''
+            state.discountText = ''
+            state.lastTouchedId = null
+            state.screen = 'WAITING'
+            render()
+          }
+        }, 5000)
+        render()
         return
       }
+
+      if (state.screen === 'PAYMENT' || state.screen === 'SUCCESS') return
 
       // скидка
       if (p.discount !== undefined) {
@@ -177,6 +196,7 @@ function applyEvent(event) {
           state.lines = state.lines.filter((l) => l !== target)
           if (state.lastTouchedId === target.id) state.lastTouchedId = null
           if (state.lines.length === 0) state.screen = 'WAITING'
+          else if (state.lines.length > 0) state.screen = 'SHOPPING'
           return
         }
         target.qty = null
@@ -216,9 +236,10 @@ function applyEvent(event) {
       break
     }
     case 'check/total': {
-      if (state.screen === 'PAYMENT' || state.screen === 'SUCCESS') return
+      if (state.screen === 'SUCCESS') return
+      // при экране оплаты (внесено) остаёмся на PAYMENT, обновляя сумму
       state.totalText = event.text || ''
-      state.screen = 'SHOPPING'
+      if (state.screen !== 'PAYMENT') state.screen = 'SHOPPING'
       break
     }
     case 'message/show': {
@@ -512,6 +533,26 @@ function renderPayment() {
   $('payMethod').textContent =
     state.opText ||
     (state.method === 'cash' ? 'Оплата наличными' : 'Оплата картой')
+
+  // внесено/сдача при наличной оплате
+  const paid = $('payPaid')
+  const change = $('payChange')
+  if (state.paidText) {
+    paid.textContent = state.paidText
+    paid.classList.remove('hidden')
+  } else {
+    paid.classList.add('hidden')
+  }
+  if (state.changeText) {
+    change.textContent = state.changeText
+    change.classList.remove('hidden')
+  } else {
+    change.classList.add('hidden')
+  }
+  const hint = $('payHint')
+  hint.textContent = state.paidText ? 'Оплата принята' : 'Ожидание подтверждения терминалом…'
+  const spin = document.querySelector('.paySpinner')
+  if (spin) spin.style.display = state.paidText ? 'none' : ''
 }
 
 function renderSuccess() {

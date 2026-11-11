@@ -1636,12 +1636,22 @@ bool CustomerDisplay::mStringOutputOnCustomerDisplay(tVariant* retVal, tVariant*
                 events.push_back(L"{\"type\":\"check/item\",\"name\":\"" + JsonEscape(line) + L"\"}");
             }
         }
-        if (idle || cancel)
+        if (idle)
         {
+            // простой/приветствие — сброс чека и заставка с текстом
             std::vector<std::wstring> pre;
             pre.push_back(L"{\"type\":\"check/clear\"}");
             if (!message.empty())
                 pre.push_back(L"{\"type\":\"message/show\",\"text\":\"" + JsonEscape(message) + L"\"}");
+            pre.insert(pre.end(), events.begin(), events.end());
+            events.swap(pre);
+        }
+        else if (cancel)
+        {
+            // «ОТМЕНА ОПЛАТЫ» — отмена операции оплаты: чек продолжает жить,
+            // показываем сообщение и возвращаемся к чеку
+            std::vector<std::wstring> pre;
+            pre.push_back(L"{\"type\":\"message/show\",\"text\":\"" + JsonEscape(message) + L"\"}");
             pre.insert(pre.end(), events.begin(), events.end());
             events.swap(pre);
         }

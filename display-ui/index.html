@@ -55,12 +55,14 @@
         <section class="screen" id="screenPayment">
           <div class="payCenter">
             <div class="payLabel">К ОПЛАТЕ</div>
-            <div class="payAmount" id="payAmount">0,00 ₽</div>
+            <div class="payAmount" id="payAmount">0,00 ₸</div>
             <div class="payMethodRow">
               <span class="payMethod" id="payMethod">Оплата картой</span>
               <span class="paySpinner"></span>
             </div>
-            <div class="payHint">Ожидание подтверждения терминалом…</div>
+            <div class="payHint" id="payHint">Ожидание подтверждения терминалом…</div>
+            <div class="payCash hidden" id="payPaid">ВНЕСЕНО: 0,00</div>
+            <div class="payCash payChange hidden" id="payChange">СДАЧА: 0,00</div>
           </div>
         </section>
 

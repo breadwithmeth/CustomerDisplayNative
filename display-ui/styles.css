@@ -731,3 +731,13 @@ button, select { font-family: inherit; }
 }
 .msgWrap { text-align: center; padding: 0 120px; }
 .msgText { font-size: 84px; font-weight: 800; line-height: 1.15; letter-spacing: 0.02em; }
+
+/* внесено/сдача (наличная оплата) */
+.payCash {
+  margin-top: 34px;
+  font-size: 56px; font-weight: 800;
+  color: var(--success);
+  font-feature-settings: 'tnum' 1;
+}
+.payCash.payChange { font-size: 40px; color: var(--ink); margin-top: 14px; }
+.payCash.hidden { display: none; }
