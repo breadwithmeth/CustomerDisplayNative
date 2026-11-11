@@ -5,6 +5,10 @@
 
 'use strict'
 
+/* Kiosk-режим: страница открыта драйвером (WebView2) — панель разработчика
+   скрыта, авто-демо выключено (чек появляется только от событий кассы) */
+const KIOSK = new URLSearchParams(location.search).has('kiosk')
+
 /* ============================ УТИЛИТЫ ============================ */
 
 const $ = (id) => document.getElementById(id)
@@ -528,7 +532,7 @@ function removeLastItem() {
 
 /* ============================ ДЕМО-ЦИКЛ ============================ */
 
-let autoDemo = true
+let autoDemo = !KIOSK // авто-демо только в браузерном прототипе
 let demoToken = 0
 
 function stopAutoDemo() {
@@ -636,11 +640,10 @@ wireDevPanel()
 fitStage()
 render()
 setInterval(() => { adTimerTick++; syncAds() }, 1000)
-autoLoop()
+if (autoDemo) autoLoop()
 
 /* Мост для драйвера: window.__pos.dispatch({type: 'line/upsert', line: {...}}).
    В kiosk-режиме (запуск из драйвера) панель разработчика скрыта. */
-const KIOSK = new URLSearchParams(location.search).has('kiosk')
 if (KIOSK) document.getElementById('devPanel').style.display = 'none'
 
 window.__pos = { dispatch, getState: () => state }

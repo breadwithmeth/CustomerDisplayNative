@@ -1,0 +1,47 @@
+[1112/030259.953:FATAL:ui\gfx\win\hwnd_util.cc:69] 87
+[1112/030259.954:FATAL:ui\gfx\win\hwnd_util.cc:69] 87
+Смоук-тест CustomerDisplayNative: C:\Users\admin\Documents\displaynativeapi\bin\Release\CustomerDisplayNative_64.dll
+
+  [OK]   LoadLibrary
+  [OK]   экспорты GetClassObject/SetPlatformCapabilities/DestroyObject/GetClassNames
+  Класс компоненты: CustomerDisplay
+  [OK]   имя класса = CustomerDisplay
+  [OK]   GetClassObject создал компоненту
+  [OK]   setMemManager
+  [OK]   Init(nullptr) tolerated
+  [OK]   GetInfo == 2005 (как в рабочих драйверах InnovaIT)
+  [OK]   FindMethod(ConnectEquipment)
+  [OK]   FindMethod(ПодключитьОборудование)
+  [OK]   FindMethod(StringOutputOnCustomerDisplay)
+  [OK]   FindMethod(ВывестиСтрокиНаДисплейПокупателя)
+  [OK]   FindMethod(GetCustomerDisplayOptions)
+  [OK]   GetDescription -> true
+  DriverDescription: 481 байт
+  [OK]   XML содержит CustomerDisplay
+         <?xml version="1.0" encoding="UTF-8"?>
+<DriverDescription Name="��ᯫ�� ���㯠⥫� (������)" Description="�뢮� ���ଠ樨 �� ��ᯫ�� ���㯠⥫�. � ����⢥ ��ᯫ�� �ᯮ������ ����� ������ ��������: �������࠭���...
+  [OK]   GetLastError код = 0 после успеха
+  [OK]   EquipmentParameters -> true
+  [OK]   TableParameters содержит MonitorIndex
+         <?xml version="1.0" encoding="UTF-8"?>
+<Settings><Page Caption="��ᯫ�� ���㯠⥫�"><Group Caption="������祭��"><Parameter Name="MonitorIndex" Caption="����� ������" Description="���浪��� ����� ������: 1 - �᭮���...
+  [OK]   GetCustomerDisplayOptions(неизвестный ID) -> ленивое создание
+  [OK]   ConnectEquipment -> true
+  DeviceID: {6B4825FC-AC61-4EA2-B83C-9648801B2BD5}
+  [OK]   DeviceID (GUID) возвращён
+  [OK]   окно дисплея создано и видимо
+  окно: 1710x1074 @ (0,0)
+  [OK]   StringOutputOnCustomerDisplay -> true
+  [OK]   QRCodeOutputOnCustomerDisplay -> true
+  [OK]   DisplayOperationStatus(2) -> true
+  [OK]   DisplayWorkplaceStatus(1, звук) -> true
+  [OK]   GetCustomerDisplayOptions -> true
+  [OK]   опции: DisplayQRCode=true
+         <?xml version="1.0" encoding="UTF-8"?>
+<CustomerDisplayOptions Columns="40" Rows="10" DisplayText="true" DisplayGraphics="true" DisplayQRCode="true" DisplayHTML="false" DisplayStatus="true" DisplayWorkplaceStatus="true" ...
+  [OK]   EquipmentTest -> true
+  [OK]   DisconnectEquipment -> true
+  [OK]   окно дисплея закрыто
+  [OK]   OutputHTML -> false (не поддерживается)
+
+Итог: УСПЕХ (0 ошибок)
