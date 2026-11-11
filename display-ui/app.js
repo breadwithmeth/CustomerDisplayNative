@@ -17,22 +17,36 @@ const fmtMoney = (v) =>
   new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v) + ' ₸'
 
 /** Из строки БПО выделяет структуру:
-    «Наименование 1 050,00 тг.»        → { name, sum }
-    «2x1 050,00 тг.=2 100,00 тг.»      → { qtyUpdate: {qty, price, total} }
-    «СКИДКА: 1110,00»                  → { discount: '1110,00' }
-    «1 110,00 тг.» (только сумма)      → { name: '', sum } — игнорируется выше */
+    «Наименование 1 050,00 тг.»              → { name, sum }
+    «…имя… 2x1 050,00 тг.=2 100,00 тг.»      → { qtyUpdate, nameBefore }
+    «-5x1 110,00 тг.=4 440,00 тг.»           → qtyUpdate с отрицательным qty (отмена)
+    «СКИДКА: 1110,00»                        → { discount }
+    «ВНЕСЕНО: 30,00 СДАЧА: 0.00»             → { paid, change }
+    «1 110,00 тг.» (только сумма)            → { sumOnly } */
 function splitItemLine(line) {
-  // qty-формат: «N×цена = сумма» (разделители тысяч/пробелы/валюта)
-  const q = line.match(/^\s*(\d+)\s*[x×]\s*(\d[\d\s\u00A0]*[.,]\d{2})\s*(?:тг|₸|₽|тенге)?\.?\s*=\s*(\d[\d\s\u00A0]*[.,]\d{2})\s*(?:тг|₸|₽|тенге)?\.?\s*$/i)
+  // «…N×цена = сумма» — в конце строки (qty может быть с минусом = отмена)
+  const q = line.match(/(?:^|\s)(-?\d+)\s*[x×]\s*(-?\d[\d\s\u00A0]*[.,]\d{2})\s*(?:тг|₸|₽|тенге)?\.?\s*=\s*(-?\d[\d\s\u00A0]*[.,]\d{2})\s*(?:тг|₸|₽|тенге)?\.?\s*$/i)
   if (q) {
-    return { qtyUpdate: { qty: parseInt(q[1], 10), price: q[2].trim(), total: q[3].trim() } }
+    return {
+      qtyUpdate: { qty: parseInt(q[1], 10), price: q[2].trim(), total: q[3].trim() },
+      nameBefore: q.index > 0 ? line.slice(0, q.index).trim() : '',
+    }
   }
   // скидка
   const d = line.match(/^\s*скидка\s*:?\s*(.*)$/i)
   if (d) return { discount: d[1].trim() }
+  // внесено/сдача (наличная оплата)
+  const paid = line.match(/^\s*внесено\s*:?\s*(.+?)\s*сдача\s*:?\s*(\S+)\s*$/i)
+  if (paid) return { paid: paid[1].trim(), change: paid[2].trim() }
   // «имя … сумма» — сумма в конце строки
   const m = line.match(/^(.*?)[\s\u00A0]*((?:\d[\d\s\u00A0]*[.,]\d{2})\s*(?:тг|₸|₽|тенге)?\.?)\s*$/i)
-  if (m && m[1].trim()) return { name: m[1].replace(/[-=]\s*$/, '').trim(), sum: m[2].trim() }
+  if (m) {
+    const name = m[1].trim()
+    const sum = m[2].trim()
+    // без наименования или «имя» — чистая сумма: не позиция
+    if (!name || /^[\d\s\u00A0.,]+(?:тг|₸|₽|тенге)?\.?$/i.test(name)) return { sumOnly: sum }
+    return { name, sum }
+  }
   return { name: line.trim(), sum: '' }
 }
 
@@ -135,33 +149,55 @@ function applyEvent(event) {
       if (state.screen === 'PAYMENT' || state.screen === 'SUCCESS') return
       const p = splitItemLine(event.name || '')
 
-      // «N×цена = сумма» — обновление количества у последней активной позиции
-      if (p.qtyUpdate) {
-        const target = state.lines.find((l) => l.id === state.lastTouchedId) ||
-                       state.lines[state.lines.length - 1]
-        if (target) {
-          target.qty = p.qtyUpdate.qty
-          target.qtyText = p.qtyUpdate.qty + '×' + p.qtyUpdate.price
-          target.sumText = p.qtyUpdate.total
-          state.screen = 'SHOPPING'
-        }
+      // оплата наличными: «ВНЕСЕНО: X СДАЧА: Y»
+      if (p.paid !== undefined) {
+        state.opText = 'Внесено: ' + p.paid + (p.change ? '  ·  Сдача: ' + p.change : '')
+        state.screen = 'PAYMENT'
         return
       }
 
       // скидка
       if (p.discount !== undefined) {
-        state.discountText = p.discount || ''
+        state.discountText = p.discount
         state.screen = 'SHOPPING'
         return
       }
 
-      const name = p.name
-      if (!name || (!p.sum && !state.lines.some((l) => l.name === name))) return
+      // «N×цена = сумма» — обновление количества (или отмена при отрицательном qty)
+      if (p.qtyUpdate) {
+        let target = state.lines.find((l) => l.id === state.lastTouchedId) ||
+                     state.lines[state.lines.length - 1]
+        if (p.nameBefore) {
+          const named = state.lines.find((l) => l.name === p.nameBefore)
+          if (named) target = named
+        }
+        if (!target) return
+        if (p.qtyUpdate.qty < 0) {
+          // отмена позиции — убираем её из чека
+          state.lines = state.lines.filter((l) => l !== target)
+          if (state.lastTouchedId === target.id) state.lastTouchedId = null
+          if (state.lines.length === 0) state.screen = 'WAITING'
+          return
+        }
+        target.qty = null
+        target.qtyText = p.qtyUpdate.qty + '×' + p.qtyUpdate.price
+        target.sumText = p.qtyUpdate.total
+        state.lastTouchedId = target.id
+        state.screen = 'SHOPPING'
+        return
+      }
 
-      // сумма 0,00 при уже известной позиции — шум пересчёта, игнорируем
+      // только сумма без наименования — шум пересчёта
+      if (p.sumOnly) return
+
+      const name = p.name
+      if (!name) return
+
+      // позиция уже в чеке
       const existing = state.lines.find((l) => l.name === name)
       if (existing) {
-        if (p.sum && p.sum !== '0,00 ₸' && p.sum !== '0.00 ₸') {
+        // «0,00»-повтор — шум, не трогаем; реальная сумма — обновляем
+        if (p.sum && !/^0[.,]00/.test(p.sum)) {
           existing.sumText = p.sum
           state.lastTouchedId = existing.id
           state.screen = 'SHOPPING'
