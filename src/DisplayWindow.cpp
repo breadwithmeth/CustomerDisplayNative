@@ -5,8 +5,17 @@
 
 #include <chrono>
 #include <mutex>
+#include <wrl/client.h>
+#include <wrl/event.h>
+#include <wrl/implements.h>
+#include "WebView2.h"
+#include "WebView2EnvironmentOptions.h"
 
 using namespace std::chrono;
+using namespace Microsoft::WRL;
+
+// экземпляр DLL — для определения папки ui/ (см. dllmain.cpp)
+extern HMODULE g_hDllInstance;
 
 namespace cdp {
 
@@ -36,6 +45,7 @@ const wchar_t* kWindowClass = L"CustomerDisplayNativeWnd";
 
 constexpr UINT WM_APP_SETTINGS = WM_APP + 1;
 constexpr UINT WM_APP_CONTENT  = WM_APP + 2;
+constexpr UINT WM_APP_POS      = WM_APP + 3; // очередь JS-событий интерфейса
 
 // Высоты шрифтов относительно высоты клиента (до масштаба)
 struct LayoutMetrics
@@ -197,6 +207,19 @@ struct DisplayWindow::Impl
     // медиа
     ImageHolder media;
     std::wstring mediaLoadedFrom;
+
+    // ---- WebView2 (создаётся в GUI-потоке; недоступен → GDI-фоллбэк) ----
+    ComPtr<ICoreWebView2Environment> wvEnv;
+    ComPtr<ICoreWebView2Controller> wvController;
+    ComPtr<ICoreWebView2> wv;
+    bool wvReady = false;
+    bool gdiFallback = false;
+    bool controllerRetried = false;
+    EventRegistrationToken navToken = {};
+    std::wstring uiFolder;      // <каталог DLL>\ui — https://app.customer/
+    std::wstring mediaDir;      // медиафайлы устройства — https://app.media/
+    std::wstring userDataDir;   // профиль WebView2 (temp, на устройство)
+    std::vector<std::wstring> pendingJs; // события до готовности страницы
 
     Impl()
     {
@@ -577,6 +600,184 @@ void PaintContent(HDC dc, Impl& impl, int w, int h)
     }
 }
 
+// ------------------------------------------------------------------ WebView2
+
+std::wstring GetDllDirectory()
+{
+    wchar_t buf[MAX_PATH + 1] = { 0 };
+    ::GetModuleFileNameW(g_hDllInstance, buf, MAX_PATH);
+    std::wstring p(buf);
+    size_t s = p.find_last_of(L"\\/");
+    return s == std::wstring::npos ? std::wstring(L".") : p.substr(0, s);
+}
+
+void WvLog(const std::wstring& msg)
+{
+    wchar_t tempPath[MAX_PATH + 1] = { 0 };
+    ::GetTempPathW(MAX_PATH, tempPath);
+    std::wstring dir = std::wstring(tempPath) + L"CustomerDisplayNative";
+    ::CreateDirectoryW(dir.c_str(), nullptr);
+    HANDLE h = ::CreateFileW((dir + L"\\webview.log").c_str(), FILE_APPEND_DATA,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                             OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h != INVALID_HANDLE_VALUE)
+    {
+        SYSTEMTIME st;
+        ::GetLocalTime(&st);
+        wchar_t ts[48];
+        ::swprintf(ts, 48, L"[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+        std::wstring full = std::wstring(ts) + msg + L"\r\n";
+        DWORD written = 0;
+        ::WriteFile(h, full.c_str(), (DWORD)(full.size() * sizeof(wchar_t)), &written, nullptr);
+        ::CloseHandle(h);
+    }
+}
+
+void FlushPendingJs(Impl* impl)
+{
+    if (!impl->wv)
+        return;
+    std::vector<std::wstring> batch;
+    ::EnterCriticalSection(&impl->lock);
+    batch.swap(impl->pendingJs);
+    ::LeaveCriticalSection(&impl->lock);
+    for (const auto& js : batch)
+        impl->wv->ExecuteScript(js.c_str(), nullptr);
+}
+
+/** Подключение готового контроллера: настройки, хосты, навигация (GUI-поток) */
+HRESULT AttachWebview(Impl* impl, ICoreWebView2Controller* ctrl)
+{
+    impl->wvController = ctrl;
+    WvLog(L"controller OK");
+    ComPtr<ICoreWebView2> wv;
+    if (FAILED(impl->wvController->get_CoreWebView2(&wv)) || !wv)
+    {
+        impl->gdiFallback = true;
+        return E_FAIL;
+    }
+    impl->wv = wv;
+    ComPtr<ICoreWebView2Settings> st;
+    if (SUCCEEDED(wv->get_Settings(&st)) && st)
+    {
+        st->put_AreDefaultContextMenusEnabled(FALSE);
+        st->put_AreDevToolsEnabled(FALSE);
+        st->put_IsStatusBarEnabled(FALSE);
+        st->put_IsZoomControlEnabled(FALSE);
+        // AreBrowserAcceleratorKeysEnabled — ICoreWebView2Settings3
+        ComPtr<ICoreWebView2Settings3> st3;
+        if (SUCCEEDED(st->QueryInterface(IID_PPV_ARGS(&st3))) && st3)
+            st3->put_AreBrowserAcceleratorKeysEnabled(FALSE);
+    }
+    // маппинг виртуальных хостов — ICoreWebView2_3
+    ComPtr<ICoreWebView2_3> wv3;
+    if (SUCCEEDED(wv->QueryInterface(IID_PPV_ARGS(&wv3))) && wv3)
+    {
+        wv3->SetVirtualHostNameToFolderMapping(
+            L"app.customer", impl->uiFolder.c_str(),
+            COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+        if (!impl->mediaDir.empty())
+            wv3->SetVirtualHostNameToFolderMapping(
+                L"app.media", impl->mediaDir.c_str(),
+                COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+        WvLog(L"virtual hosts mapped");
+    }
+    RECT rc;
+    ::GetClientRect(impl->hwnd, &rc);
+    impl->wvController->put_Bounds(rc);
+    // события, накопленные до загрузки страницы, уходят после неё
+    impl->wv->add_NavigationCompleted(
+        Callback<ICoreWebView2NavigationCompletedEventHandler>(
+            [impl](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
+                impl->wvReady = true;
+                WvLog(L"navigation completed — интерфейс покупателя активен");
+                FlushPendingJs(impl);
+                return S_OK;
+            }).Get(),
+        &impl->navToken);
+    impl->wv->Navigate(L"https://app.customer/index.html?kiosk=1");
+    WvLog(L"navigate -> app.customer/index.html?kiosk=1");
+    return S_OK;
+}
+
+void StartWebView2(Impl* impl)
+{
+    WvLog(L"StartWebView2: begin, uiFolder=" + impl->uiFolder);
+    // рантайм WebView2 установлен?
+    LPWSTR ver = nullptr;
+    HRESULT hr = ::GetAvailableCoreWebView2BrowserVersionString(nullptr, &ver);
+    if (FAILED(hr) || !ver || !*ver)
+    {
+        if (ver) ::CoTaskMemFree(ver);
+        impl->gdiFallback = true; // GDI-рендеринг остаётся
+        WvLog(L"StartWebView2: runtime not available");
+        return;
+    }
+    std::wstring verStr = ver;
+    ::CoTaskMemFree(ver);
+    WvLog(L"StartWebView2: runtime " + verStr);
+
+    auto opts = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+    hr = ::CreateCoreWebView2EnvironmentWithOptions(
+        nullptr, impl->userDataDir.c_str(), opts.Get(),
+        Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+            [impl](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+                if (FAILED(result) || !env)
+                {
+                    wchar_t b[64];
+                    ::swprintf(b, 64, L"env FAILED hr=0x%08X", (unsigned)result);
+                    WvLog(b);
+                    impl->gdiFallback = true;
+                    return E_FAIL;
+                }
+                impl->wvEnv = env;
+                WvLog(L"env OK");
+                return impl->wvEnv->CreateCoreWebView2Controller(
+                    impl->hwnd,
+                    Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                        [impl](HRESULT result2, ICoreWebView2Controller* ctrl) -> HRESULT {
+                            // при одновременном старте нескольких устройств создание
+                            // контроллера может прерваться (E_ABORT) — повторяем один раз
+                            if (result2 == E_ABORT && !ctrl && impl->wvEnv && !impl->controllerRetried)
+                            {
+                                impl->controllerRetried = true;
+                                WvLog(L"controller aborted — retry");
+                                ::Sleep(300);
+                                return impl->wvEnv->CreateCoreWebView2Controller(
+                                    impl->hwnd,
+                                    Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                                        [impl](HRESULT result3, ICoreWebView2Controller* ctrl2) -> HRESULT {
+                                            if (FAILED(result3) || !ctrl2)
+                                            {
+                                                wchar_t b[64];
+                                                ::swprintf(b, 64, L"controller retry FAILED hr=0x%08X", (unsigned)result3);
+                                                WvLog(b);
+                                                impl->gdiFallback = true;
+                                                return E_FAIL;
+                                            }
+                                            return AttachWebview(impl, ctrl2);
+                                        }).Get());
+                            }
+                            if (FAILED(result2) || !ctrl)
+                            {
+                                wchar_t b[64];
+                                ::swprintf(b, 64, L"controller FAILED hr=0x%08X", (unsigned)result2);
+                                WvLog(b);
+                                impl->gdiFallback = true;
+                                return E_FAIL;
+                            }
+                            return AttachWebview(impl, ctrl);
+                        }).Get());
+            }).Get());
+    if (FAILED(hr))
+    {
+        wchar_t b[64];
+        ::swprintf(b, 64, L"CreateEnvironment call FAILED hr=0x%08X", (unsigned)hr);
+        WvLog(b);
+        impl->gdiFallback = true;
+    }
+}
+
 // ------------------------------------------------------------------ мониторы
 
 struct MonitorRect { RECT rc; bool primary; };
@@ -715,6 +916,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_PAINT:
         {
+            if (impl->wvReady)
+                break; // WebView2 отрисовал интерфейс сам
             PAINTSTRUCT ps;
             HDC dc = ::BeginPaint(hwnd, &ps);
             RECT rc; ::GetClientRect(hwnd, &rc);
@@ -725,6 +928,26 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             PaintContent(impl->memDc, *impl, w, h);
             ::BitBlt(dc, 0, 0, w, h, impl->memDc, 0, 0, SRCCOPY);
             ::EndPaint(hwnd, &ps);
+        }
+        return 0;
+
+    case WM_SIZE:
+        if (impl->wvController)
+        {
+            RECT rc; ::GetClientRect(hwnd, &rc);
+            impl->wvController->put_Bounds(rc);
+        }
+        break;
+
+    case WM_APP_POS:
+        if (impl->wvReady && impl->wv)
+        {
+            std::vector<std::wstring> batch;
+            ::EnterCriticalSection(&impl->lock);
+            batch.swap(impl->pendingJs);
+            ::LeaveCriticalSection(&impl->lock);
+            for (const auto& js : batch)
+                impl->wv->ExecuteScript(js.c_str(), nullptr);
         }
         return 0;
 
@@ -767,6 +990,9 @@ unsigned __stdcall DisplayThreadProc(void* p)
 {
     auto* impl = (DisplayWindow::Impl*)p;
 
+    // COM (STA) обязателен для WebView2
+    ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
     ULONG_PTR gdiToken = 0;
     Gdiplus::GdiplusStartupInput gdiInput;
     if (Gdiplus::GdiplusStartup(&gdiToken, &gdiInput, nullptr) != Gdiplus::Ok)
@@ -795,15 +1021,27 @@ unsigned __stdcall DisplayThreadProc(void* p)
     ::SetEvent(impl->started);
     ::PostMessageW(hwnd, WM_APP_SETTINGS, 0, 0);
 
+    // интерфейс покупателя (WebView2); при отсутствии рантайма — GDI-фоллбэк
+    StartWebView2(impl);
+
     MSG msg;
     while (::GetMessageW(&msg, nullptr, 0, 0) > 0) {
         ::TranslateMessage(&msg);
         ::DispatchMessageW(&msg);
     }
 
+    // COM-объекты WebView2 освобождаем в GUI-потоке
+    if (impl->wvController)
+        impl->wvController->Close();
+    impl->wvController.Reset();
+    impl->wv.Reset();
+    impl->wvEnv.Reset();
+    impl->wvReady = false;
+
     impl->hwnd = nullptr;
     impl->FreeBuffers();
     if (gdiToken) Gdiplus::GdiplusShutdown(gdiToken);
+    ::CoUninitialize();
     return 0;
 }
 
@@ -822,7 +1060,8 @@ DisplayWindow::~DisplayWindow()
     delete m_impl;
 }
 
-bool DisplayWindow::Start(const DisplaySettings& settings, const std::wstring& deviceTitle)
+bool DisplayWindow::Start(const DisplaySettings& settings, const std::wstring& deviceTitle,
+                          const std::wstring& mediaDir)
 {
     Impl* impl = m_impl;
     ::EnterCriticalSection(&impl->lock);
@@ -832,6 +1071,16 @@ bool DisplayWindow::Start(const DisplaySettings& settings, const std::wstring& d
     }
     impl->settings = settings;
     impl->title = deviceTitle.empty() ? L"Дисплей покупателя" : deviceTitle;
+    impl->mediaDir = mediaDir;
+    impl->uiFolder = GetDllDirectory() + L"\\ui";
+    wchar_t tempPath[MAX_PATH + 1] = { 0 };
+    ::GetTempPathW(MAX_PATH, tempPath);
+    static std::atomic<int> wvSeq(0);
+    impl->userDataDir = std::wstring(tempPath) + L"CustomerDisplayNative\\webview\\w" +
+                        std::to_wstring(++wvSeq);
+    impl->wvReady = false;
+    impl->gdiFallback = false;
+    impl->controllerRetried = false;
     impl->lastError.clear();
     ::LeaveCriticalSection(&impl->lock);
 
@@ -942,6 +1191,30 @@ bool DisplayWindow::IsWindowVisibleNow() const
 const std::wstring& DisplayWindow::LastError() const
 {
     return m_impl->lastError;
+}
+
+void DisplayWindow::PostPosEvent(const std::wstring& jsDispatchCall)
+{
+    Impl* impl = m_impl;
+    ::EnterCriticalSection(&impl->lock);
+    if (impl->gdiFallback) { // GDI-режим: интерфейсных событий нет
+        ::LeaveCriticalSection(&impl->lock);
+        return;
+    }
+    impl->pendingJs.push_back(L"window.__pos&&window.__pos.dispatch(" + jsDispatchCall + L");");
+    HWND hwnd = impl->hwnd;
+    ::LeaveCriticalSection(&impl->lock);
+    if (hwnd)
+        ::PostMessageW(hwnd, WM_APP_POS, 0, 0);
+}
+
+bool DisplayWindow::IsWebviewActive() const
+{
+    Impl* impl = m_impl;
+    ::EnterCriticalSection(&impl->lock);
+    bool active = impl->wvReady && !impl->gdiFallback;
+    ::LeaveCriticalSection(&impl->lock);
+    return active;
 }
 
 std::wstring DisplayWindow::DescribeState() const

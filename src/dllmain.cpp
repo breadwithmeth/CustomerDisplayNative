@@ -1,5 +1,8 @@
 // dllmain.cpp — точка входа DLL
 #include "stdafx.h"
+
+HMODULE g_hDllInstance = nullptr;
+
 BOOL APIENTRY DllMain(HMODULE hModule,
                       DWORD ul_reason_for_call,
                       LPVOID lpReserved)
@@ -7,6 +10,8 @@ BOOL APIENTRY DllMain(HMODULE hModule,
     switch (ul_reason_for_call)
     {
     case DLL_PROCESS_ATTACH:
+        g_hDllInstance = hModule;
+        break;
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
     case DLL_PROCESS_DETACH:

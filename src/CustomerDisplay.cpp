@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "CustomerDisplay.h"
 #include "XmlUtil.h"
+#include "thirdparty/qrcodegen/qrcodegen.hpp"
 
 #include <cwchar>
 
@@ -377,6 +378,177 @@ std::wstring ParamToLogString(tVariant* p)
     case VTYPE_EMPTY: return L"empty";
     default:          return L"vt=" + std::to_wstring((int)TV_VT(p));
     }
+}
+
+// ------------------- события интерфейса покупателя (WebView2) -------------------
+
+std::wstring JsonEscape(const std::wstring& s)
+{
+    std::wstring out;
+    out.reserve(s.size() + 8);
+    wchar_t buf[8];
+    for (wchar_t c : s)
+    {
+        switch (c)
+        {
+        case L'"': out += L"\\\""; break;
+        case L'\\': out += L"\\\\"; break;
+        case L'\n': out += L"\\n"; break;
+        case L'\r': out += L"\\r"; break;
+        case L'\t': out += L"\\t"; break;
+        default:
+            if (c < 0x20)
+            {
+                ::swprintf(buf, 8, L"\\u%04x", (unsigned)c);
+                out += buf;
+            }
+            else out += c;
+        }
+    }
+    return out;
+}
+
+std::string WideToUtf8Str(const std::wstring& w)
+{
+    if (w.empty()) return std::string();
+    int n = ::WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+    std::string s(n, '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), &s[0], n, nullptr, nullptr);
+    return s;
+}
+
+std::wstring EncodeBase64(const std::vector<uint8_t>& bytes)
+{
+    static const wchar_t* alphabet =
+        L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::wstring out;
+    out.reserve((bytes.size() + 2) / 3 * 4);
+    for (size_t i = 0; i < bytes.size(); i += 3)
+    {
+        uint32_t v = (uint32_t)bytes[i] << 16;
+        if (i + 1 < bytes.size()) v |= (uint32_t)bytes[i + 1] << 8;
+        if (i + 2 < bytes.size()) v |= bytes[i + 2];
+        out += alphabet[(v >> 18) & 63];
+        out += alphabet[(v >> 12) & 63];
+        out += (i + 1 < bytes.size()) ? alphabet[(v >> 6) & 63] : L'=';
+        out += (i + 2 < bytes.size()) ? alphabet[v & 63] : L'=';
+    }
+    return out;
+}
+
+/** QR-код из строки → PNG → data URL (для WebView2-интерфейса) */
+std::wstring MakeQrDataUrl(const std::wstring& value)
+{
+    try
+    {
+        const std::string utf8 = WideToUtf8Str(value);
+        qrcodegen::QrCode qr = qrcodegen::QrCode::encodeText(utf8.c_str(), qrcodegen::QrCode::Ecc::MEDIUM);
+        const int n = qr.getSize();
+        const int scale = 8, quiet = 4;
+        const int total = (n + quiet * 2) * scale;
+
+        Gdiplus::GdiplusStartupInput gi;
+        ULONG_PTR tok = 0;
+        if (Gdiplus::GdiplusStartup(&tok, &gi, nullptr) != Gdiplus::Ok)
+            return std::wstring();
+
+        std::wstring result;
+        {
+            Gdiplus::Bitmap bmp(total, total, PixelFormat24bppRGB);
+            Gdiplus::BitmapData bd;
+            Gdiplus::Rect rc(0, 0, total, total);
+            if (bmp.LockBits(&rc, Gdiplus::ImageLockModeWrite, PixelFormat24bppRGB, &bd) == Gdiplus::Ok)
+            {
+                const int stride = bd.Stride;
+                uint8_t* px = (uint8_t*)bd.Scan0;
+                for (int y = 0; y < total; ++y)
+                {
+                    uint8_t* row = px + (size_t)y * stride;
+                    for (int x = 0; x < total; ++x)
+                    {
+                        row[x * 3] = 255; row[x * 3 + 1] = 255; row[x * 3 + 2] = 255;
+                    }
+                }
+                for (int r = 0; r < n; ++r)
+                    for (int c = 0; c < n; ++c)
+                        if (qr.getModule(c, r))
+                            for (int dy = 0; dy < scale; ++dy)
+                            {
+                                uint8_t* row = px + (size_t)((quiet + r) * scale + dy) * stride;
+                                for (int dx = 0; dx < scale; ++dx)
+                                {
+                                    uint8_t* p = row + (size_t)((quiet + c) * scale + dx) * 3;
+                                    p[0] = p[1] = p[2] = 0;
+                                }
+                            }
+                bmp.UnlockBits(&bd);
+
+                IStream* stream = nullptr;
+                if (SUCCEEDED(::CreateStreamOnHGlobal(nullptr, TRUE, &stream)))
+                {
+                    CLSID pngCls;
+                    if (SUCCEEDED(::CLSIDFromString(L"{557CF406-1A04-11D3-9A73-0000F81EF32E}", &pngCls)) &&
+                        bmp.Save(stream, &pngCls, nullptr) == Gdiplus::Ok)
+                    {
+                        HGLOBAL h = nullptr;
+                        if (SUCCEEDED(::GetHGlobalFromStream(stream, &h)))
+                        {
+                            SIZE_T sz = ::GlobalSize(h);
+                            void* p = ::GlobalLock(h);
+                            if (p)
+                            {
+                                std::vector<uint8_t> bytes((uint8_t*)p, (uint8_t*)p + sz);
+                                ::GlobalUnlock(h);
+                                result = L"data:image/png;base64," + EncodeBase64(bytes);
+                            }
+                        }
+                    }
+                    stream->Release();
+                }
+            }
+        }
+        Gdiplus::GdiplusShutdown(tok);
+        return result;
+    }
+    catch (...)
+    {
+        return std::wstring();
+    }
+}
+
+/** Экранирование имени файла для URL */
+std::wstring UrlEncodeName(const std::wstring& name)
+{
+    static const wchar_t* hex = L"0123456789ABCDEF";
+    std::wstring out;
+    for (wchar_t c : name)
+    {
+        if ((c >= L'A' && c <= L'Z') || (c >= L'a' && c <= L'z') || (c >= L'0' && c <= L'9') ||
+            c == L'.' || c == L'-' || c == L'_' || c == L'~')
+            out += c;
+        else
+        {
+            unsigned v = (unsigned)c;
+            out += L'%'; out += hex[(v >> 4) & 15]; out += hex[v & 15];
+        }
+    }
+    return out;
+}
+
+/** JS: dispatch события чека из строк («Наименование | Сумма») */
+std::wstring BuildCheckLinesJs(const std::vector<std::pair<std::wstring, std::wstring>>& rows,
+                               bool hasTotal)
+{
+    std::wstring js = L"window.__pos&&window.__pos.dispatch({type:'check/lines',lines:[";
+    for (size_t i = 0; i < rows.size(); ++i)
+    {
+        const bool isTotal = hasTotal && i + 1 == rows.size();
+        js += L"{name:\"" + JsonEscape(rows[i].first) + L"\",sum:\"" +
+              JsonEscape(rows[i].second) + L"\"" + (isTotal ? L",total:true" : L"") + L"}";
+        if (i + 1 < rows.size()) js += L",";
+    }
+    js += L"]});";
+    return js;
 }
 
 } // anonymous namespace
@@ -911,15 +1083,7 @@ CustomerDisplay::Device* CustomerDisplay::ResolveDevice(const std::wstring& id,
         std::wstring settingsError;
         ParseSettings(m_legacyParams, lazy->settings, lazy->columns, lazy->rows, settingsError);
 
-        lazy->window.reset(new cdp::DisplayWindow());
-        if (!lazy->window->Start(lazy->settings, L"Дисплей покупателя"))
-            return nullptr;
-        cdp::DisplayContent welcome;
-        welcome.mode = cdp::ScreenMode::Welcome;
-        lazy->window->SetContent(welcome);
-        lazy->lastContent = welcome;
-
-        // каталог для медиафайлов
+        // каталог для медиафайлов — до запуска окна (нужен для WebView2-маппинга)
         wchar_t tempPath[MAX_PATH + 1] = { 0 };
         ::GetTempPathW(MAX_PATH, tempPath);
         std::wstring dirId = lazy->id.empty() ? GenerateDeviceId() : lazy->id;
@@ -927,6 +1091,14 @@ CustomerDisplay::Device* CustomerDisplay::ResolveDevice(const std::wstring& id,
         dirId.erase(std::remove(dirId.begin(), dirId.end(), L'}'), dirId.end());
         lazy->mediaDir = std::wstring(tempPath) + L"CustomerDisplayNative\\" + dirId;
         EnsureDirectory(lazy->mediaDir);
+
+        lazy->window.reset(new cdp::DisplayWindow());
+        if (!lazy->window->Start(lazy->settings, L"Дисплей покупателя", lazy->mediaDir))
+            return nullptr;
+        cdp::DisplayContent welcome;
+        welcome.mode = cdp::ScreenMode::Welcome;
+        lazy->window->SetContent(welcome);
+        lazy->lastContent = welcome;
 
         Device* raw = lazy.get();
         if (raw->id.empty())
@@ -947,7 +1119,7 @@ bool CustomerDisplay::EnsureDeviceWindow(Device* dev)
     if (!dev->window->IsRunning())
     {
         // окно закрыли вручную (панель задач / Alt+F4) — переоткрываем
-        if (!dev->window->Start(dev->settings, L"Дисплей покупателя"))
+        if (!dev->window->Start(dev->settings, L"Дисплей покупателя", dev->mediaDir))
             return false;
         dev->window->SetContent(dev->lastContent);
         LogLine(L"WINDOW reopen: " + dev->window->DescribeState());
@@ -1139,8 +1311,18 @@ bool CustomerDisplay::mConnectEquipment(tVariant* retVal, tVariant* deviceId,
 
     dev->id = GenerateDeviceId();
 
+    // каталог для медиафайлов — до запуска окна (нужен для WebView2-маппинга)
+    wchar_t tempPath[MAX_PATH + 1] = { 0 };
+    ::GetTempPathW(MAX_PATH, tempPath);
+    std::wstring dirId = dev->id;
+    // убираем фигурные скобки из GUID
+    dirId.erase(std::remove(dirId.begin(), dirId.end(), L'{'), dirId.end());
+    dirId.erase(std::remove(dirId.begin(), dirId.end(), L'}'), dirId.end());
+    dev->mediaDir = std::wstring(tempPath) + L"CustomerDisplayNative\\" + dirId;
+    EnsureDirectory(dev->mediaDir);
+
     dev->window.reset(new cdp::DisplayWindow());
-    if (!dev->window->Start(dev->settings, L"Дисплей покупателя"))
+    if (!dev->window->Start(dev->settings, L"Дисплей покупателя", dev->mediaDir))
     {
         std::wstring err = dev->window->LastError();
         setError(102, L"Не удалось открыть окно дисплея" +
@@ -1155,16 +1337,6 @@ bool CustomerDisplay::mConnectEquipment(tVariant* retVal, tVariant* deviceId,
     dev->window->SetContent(welcome);
     dev->lastContent = welcome;
     LogLine(L"WINDOW ConnectEquipment: " + dev->window->DescribeState());
-
-    // каталог для медиафайлов
-    wchar_t tempPath[MAX_PATH + 1] = { 0 };
-    ::GetTempPathW(MAX_PATH, tempPath);
-    std::wstring dirId = dev->id;
-    // убираем фигурные скобки из GUID
-    dirId.erase(std::remove(dirId.begin(), dirId.end(), L'{'), dirId.end());
-    dirId.erase(std::remove(dirId.begin(), dirId.end(), L'}'), dirId.end());
-    dev->mediaDir = std::wstring(tempPath) + L"CustomerDisplayNative\\" + dirId;
-    EnsureDirectory(dev->mediaDir);
 
     ::EnterCriticalSection(&m_devicesLock);
     m_devices.emplace_back(dev);
@@ -1243,7 +1415,10 @@ bool CustomerDisplay::mEquipmentTest(tVariant* retVal, tVariant* equipmentType,
 
     if (dev && dev->window && dev->window->IsRunning())
     {
-        RunDemo(dev->window.get());
+        if (dev->window->IsWebviewActive())
+            dev->window->PostPosEvent(L"window.__pos&&window.__pos.dispatch({type:'demo/run'});");
+        else
+            RunDemo(dev->window.get());
         setWStringToTVariant(description,
             L"Демонстрация выведена на дисплей покупателя и будет заменена "
             L"рабочим экраном через несколько секунд");
@@ -1412,6 +1587,9 @@ bool CustomerDisplay::mStringOutputOnCustomerDisplay(tVariant* retVal, tVariant*
     dev->lastContent = content;
     LogLine(L"WINDOW StringOutput: " + dev->window->DescribeState());
 
+    // интерфейс покупателя (WebView2): чек готовыми строками
+    dev->window->PostPosEvent(BuildCheckLinesJs(content.rows, content.hasTotal));
+
     setBoolToTVariant(retVal, true);
     setError(0, L"");
     return true;
@@ -1433,6 +1611,7 @@ bool CustomerDisplay::mClearCustomerDisplay(tVariant* retVal, tVariant* deviceId
     welcome.mode = cdp::ScreenMode::Welcome;
     dev->window->SetContent(welcome);
     dev->lastContent = welcome;
+    dev->window->PostPosEvent(L"window.__pos&&window.__pos.dispatch({type:'check/clear'});");
     setBoolToTVariant(retVal, true);
     setError(0, L"");
     return true;
@@ -1507,6 +1686,9 @@ bool CustomerDisplay::mAddMediaFile(tVariant* retVal, tVariant* deviceId,
     content.mediaPath = full;
     dev->window->SetContent(content);
     dev->lastContent = content;
+    dev->window->PostPosEvent(
+        L"window.__pos&&window.__pos.dispatch({type:'media/show',url:'https://app.media/" +
+        UrlEncodeName(SanitizeFileName(name)) + L"'});");
     setBoolToTVariant(retVal, true);
     setError(0, L"");
     return true;
@@ -1548,6 +1730,18 @@ bool CustomerDisplay::mQrCodeOutputOnCustomerDisplay(tVariant* retVal, tVariant*
     content.qrValue = value;
     dev->window->SetContent(content);
     dev->lastContent = content;
+
+    // WebView2-интерфейс: QR картинкой (готовый PNG) или генерация из значения
+    std::wstring dataUrl;
+    if (!content.qrPng.empty())
+        dataUrl = L"data:image/png;base64," + EncodeBase64(content.qrPng);
+    else
+        dataUrl = MakeQrDataUrl(value);
+    if (!dataUrl.empty())
+        dev->window->PostPosEvent(
+            L"window.__pos&&window.__pos.dispatch({type:'qr/show',dataUrl:\"" +
+            JsonEscape(dataUrl) + L"\"});");
+
     setBoolToTVariant(retVal, true);
     setError(0, L"");
     return true;
@@ -1571,6 +1765,9 @@ bool CustomerDisplay::mDisplayOperationStatus(tVariant* retVal, tVariant* device
     content.statusCode = std::min(2L, std::max(0L, getLongParam(operationStatus, 0, 0)));
     dev->window->SetContent(content);
     dev->lastContent = content;
+    wchar_t statusBuf[24];
+    ::swprintf(statusBuf, 24, L"{type:'op/status',code:%ld}", content.statusCode);
+    dev->window->PostPosEvent(statusBuf);
     setBoolToTVariant(retVal, true);
     setError(0, L"");
     return true;
@@ -1744,6 +1941,14 @@ bool CustomerDisplay::mOpenLegacy(tVariant* retVal, tVariant* id)
         std::wstring settingsError;
         ParseSettings(m_legacyParams, m_legacyDevice->settings,
                       m_legacyDevice->columns, m_legacyDevice->rows, settingsError);
+        // каталог медиафайлов — до запуска окна (нужен для WebView2-маппинга)
+        wchar_t tempPath[MAX_PATH + 1] = { 0 };
+        ::GetTempPathW(MAX_PATH, tempPath);
+        std::wstring dirId = GenerateDeviceId();
+        dirId.erase(std::remove(dirId.begin(), dirId.end(), L'{'), dirId.end());
+        dirId.erase(std::remove(dirId.begin(), dirId.end(), L'}'), dirId.end());
+        m_legacyDevice->mediaDir = std::wstring(tempPath) + L"CustomerDisplayNative\\" + dirId;
+        EnsureDirectory(m_legacyDevice->mediaDir);
     }
     Device* dev = m_legacyDevice.get();
     // запоминаем ID, под которым устройство знает вызывающая сторона (БПО)
@@ -1756,7 +1961,7 @@ bool CustomerDisplay::mOpenLegacy(tVariant* retVal, tVariant* id)
 
     if (!dev->window->IsRunning())
     {
-        if (!dev->window->Start(dev->settings, L"Дисплей покупателя"))
+        if (!dev->window->Start(dev->settings, L"Дисплей покупателя", dev->mediaDir))
         {
             std::wstring err = dev->window->LastError();
             setError(102, L"Не удалось открыть окно дисплея" +

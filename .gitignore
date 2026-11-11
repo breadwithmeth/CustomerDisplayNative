@@ -32,3 +32,9 @@ tests/1c/convert*.txt
 tests/1c/*.log
 tests/1c/enterprise_ret.txt
 tests/1c/result.txt
+tests/smoke/native_*.png
+tests/smoke/nw*.png
+tests/smoke/smoke_out.txt
+tests/smoke/shoot*.ps1
+tests/smoke/enum.ps1
+thirdparty/webview2.zip

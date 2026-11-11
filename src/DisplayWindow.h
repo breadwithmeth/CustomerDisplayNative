@@ -67,7 +67,9 @@ public:
     ~DisplayWindow();
 
     // Запуск GUI-потока и создание окна. false — не удалось (GetLastErrorText).
-    bool Start(const DisplaySettings& settings, const std::wstring& deviceTitle);
+    // mediaDir — папка медиафайлов устройства (маппится в WebView2 как https://app.media/)
+    bool Start(const DisplaySettings& settings, const std::wstring& deviceTitle,
+               const std::wstring& mediaDir = L"");
 
     // Остановка потока и уничтожение окна.
     void Stop();
@@ -78,8 +80,15 @@ public:
     // Обновить настройки (положение/оформление) — окно перепозиционируется.
     bool ApplySettings(const DisplaySettings& settings);
 
-    // Установить содержимое экрана и перерисовать.
+    // Установить содержимое экрана и перерисовать (GDI-фоллбэк).
     void SetContent(const DisplayContent& content);
+
+    // Событие интерфейса покупателя — готовый JS-вызов dispatch(...)
+    // (потокобезопасно; в GDI-фоллбэке игнорируется)
+    void PostPosEvent(const std::wstring& jsDispatchCall);
+
+    // Активен ли WebView2 (иначе — GDI-фоллбэк)
+    bool IsWebviewActive() const;
 
     // Проверка видимости (для смоук-тестов)
     bool IsWindowVisibleNow() const;

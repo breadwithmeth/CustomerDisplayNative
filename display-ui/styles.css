@@ -688,3 +688,35 @@ button, select { font-family: inherit; }
 
 /* реклама-картинка: занимает всю область без текста */
 .adImgFull { display: block; background: #0C0D0F; }
+
+/* Без шапки: чек начинается сразу со списка */
+.receiptPane { padding-top: 48px; }
+.rcList { justify-content: flex-start; }
+
+/* waTop: только часы, справа */
+.waTop { padding: 52px 64px 0; }
+
+/* ============================ QR-ОПЛАТА / МЕДИА (из драйвера) ============================ */
+
+#screenQr {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--base);
+}
+.qrPayWrap { text-align: center; }
+.qrPayCard {
+  width: 640px; height: 640px; margin: 0 auto;
+  background: #FFFFFF; border-radius: 28px;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 40px 120px rgba(0,0,0,0.5);
+}
+.qrPayCard img { width: 90%; height: 90%; object-fit: contain; }
+.qrPayCaption {
+  margin-top: 40px; font-size: 30px; font-weight: 700; color: var(--ink);
+  letter-spacing: 0.04em;
+}
+#screenMedia { background: #000; }
+.mediaImg {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%; object-fit: cover;
+}

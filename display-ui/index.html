@@ -20,7 +20,6 @@
         <section class="screen" id="screenWaiting">
           <div class="adLayers" id="waitingAdLayers"></div>
           <header class="waTop">
-            <div class="logo"><span class="logoMark"></span><span class="logoText">МАГАЗИН</span></div>
             <div class="waClock" id="waClock">00:00</div>
           </header>
           <footer class="waDots" id="waDots"></footer>
@@ -30,11 +29,6 @@
         <section class="screen" id="screenShopping">
           <!-- левая область: чек -->
           <div class="receiptPane">
-            <header class="rcHeader">
-              <div class="logo"><span class="logoMark"></span><span class="logoText">МАГАЗИН</span></div>
-              <div class="rcTitle">ВАША ПОКУПКА</div>
-            </header>
-
             <div class="rcList" id="rcList"><!-- строки чека --></div>
             <div class="rcListMask" id="rcListMask"></div>
 
@@ -90,6 +84,19 @@
             <div class="errTitle">ОШИБКА ОПЕРАЦИИ</div>
             <div class="errMsg" id="errMsg">Повторите попытку.</div>
           </div>
+        </section>
+
+        <!-- РЕЖИМ: QR-оплата (из драйвера) -->
+        <section class="screen" id="screenQr">
+          <div class="qrPayWrap">
+            <div class="qrPayCard" id="qrPayCard"></div>
+            <div class="qrPayCaption">Сканируйте QR-код для оплаты</div>
+          </div>
+        </section>
+
+        <!-- РЕЖИМ: медиа из драйвера -->
+        <section class="screen" id="screenMedia">
+          <img class="mediaImg" id="mediaImg" alt="" />
         </section>
 
       </div>

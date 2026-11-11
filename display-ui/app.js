@@ -15,12 +15,15 @@ const fmtMoney = (v) =>
 /* ============================ СОСТОЯНИЕ ============================ */
 
 const state = {
-  screen: 'WAITING',   // WAITING | SHOPPING | PAYMENT | SUCCESS | ERROR
-  lines: [],           // { id, name, qty, unitPrice, discount, lineTotal }
+  screen: 'WAITING',   // WAITING | SHOPPING | PAYMENT | SUCCESS | ERROR | QR | MEDIA
+  lines: [],           // { id, name, qty, unitPrice, discount, lineTotal, sumText? }
   total: 0,
+  totalText: '',       // итог строкой (из драйвера), приоритетнее total
   method: null,        // 'card' | 'cash'
   success: null,       // { total, positions }
   error: null,
+  qrDataUrl: null,     // data:image/png;base64,... (QR-оплата из драйвера)
+  mediaUrl: null,      // url медиафайла (реклама из драйвера)
 }
 
 const recalcTotal = () => (state.total = state.lines.reduce((s, l) => s + l.lineTotal, 0))
@@ -65,6 +68,7 @@ function applyEvent(event) {
       if (state.screen === 'PAYMENT' || state.screen === 'SUCCESS') return
       state.lines = []
       state.total = 0
+      state.totalText = ''
       state.screen = 'WAITING'
       break
     }
@@ -72,6 +76,70 @@ function applyEvent(event) {
       if (state.lines.length === 0) return
       state.method = event.method || 'card'
       state.screen = 'PAYMENT'
+      break
+    }
+    // ---- чек готовыми строками из драйвера («Наименование | Сумма») ----
+    case 'check/lines': {
+      if (state.screen === 'PAYMENT' || state.screen === 'SUCCESS') return
+      const rows = event.lines || []
+      const totalRow = rows.find((r) => r.total)
+      state.lines = rows.filter((r) => !r.total).map((r, i) => ({
+        id: 'l' + i,
+        name: r.name || '',
+        qty: null,
+        unitPrice: null,
+        discount: null,
+        lineTotal: null,
+        sumText: r.sum || '',
+      }))
+      state.totalText = totalRow ? totalRow.sum || '' : ''
+      state.total = 0
+      state.screen = 'SHOPPING'
+      break
+    }
+    // ---- события из драйвера (WebView2-интеграция) ----
+    case 'op/status': {
+      // 0 — операция не выполняется, 1 — выполняется, 2 — не выполнена
+      if (event.code === 1 && state.lines.length > 0) {
+        state.method = 'card'
+        state.screen = 'PAYMENT'
+      } else if (event.code === 2 && state.screen === 'PAYMENT') {
+        state.error = 'Терминал отклонил операцию.'
+        state.screen = 'ERROR'
+        setTimeout(() => {
+          if (state.screen === 'ERROR') {
+            state.error = null
+            state.screen = state.lines.length > 0 ? 'SHOPPING' : 'WAITING'
+            render()
+          }
+        }, 4000)
+      } else if (event.code === 0 && state.screen === 'PAYMENT') {
+        state.success = { total: state.total, positions: positionsCount() }
+        state.screen = 'SUCCESS'
+        setTimeout(() => {
+          if (state.screen === 'SUCCESS') {
+            state.lines = []
+            state.total = 0
+            state.success = null
+            state.screen = 'WAITING'
+            render()
+          }
+        }, 4500)
+      }
+      break
+    }
+    case 'qr/show': {
+      state.qrDataUrl = event.dataUrl || null
+      state.screen = 'QR'
+      break
+    }
+    case 'media/show': {
+      state.mediaUrl = event.url || null
+      state.screen = 'MEDIA'
+      break
+    }
+    case 'demo/run': {
+      if (!autoDemo) runDemoCycle()
       break
     }
     case 'payment/success': {
@@ -145,7 +213,7 @@ let currentScreen = ''
 function setScreen(name) {
   if (currentScreen === name) return
   currentScreen = name
-  for (const id of ['screenWaiting', 'screenShopping', 'screenPayment', 'screenSuccess', 'screenError']) {
+  for (const id of ['screenWaiting', 'screenShopping', 'screenPayment', 'screenSuccess', 'screenError', 'screenQr', 'screenMedia']) {
     $(id).classList.toggle('active', id === 'screen' + name.charAt(0) + name.slice(1).toLowerCase())
   }
   $('devScreen').textContent = name
@@ -158,7 +226,27 @@ function render() {
   renderPayment()
   renderSuccess()
   renderError()
+  renderQr()
+  renderMedia()
   syncAds()
+}
+
+function renderQr() {
+  if (state.screen !== 'QR') return
+  const card = $('qrPayCard')
+  card.innerHTML = ''
+  if (state.qrDataUrl) {
+    const img = document.createElement('img')
+    img.src = state.qrDataUrl
+    card.appendChild(img)
+  }
+}
+
+function renderMedia() {
+  if (state.screen !== 'MEDIA') return
+  const img = $('mediaImg')
+  if (state.mediaUrl && img.getAttribute('src') !== state.mediaUrl)
+    img.src = state.mediaUrl
 }
 
 /* ---------------------------- чек ---------------------------- */
@@ -179,7 +267,6 @@ function renderReceipt() {
   }
 
   // добавить/обновить
-  let masked = false
   state.lines.forEach((line) => {
     let node = lineNodes.get(line.id)
     if (!node) {
@@ -196,18 +283,25 @@ function renderReceipt() {
     const disc = node.querySelector('.rcDisc')
 
     if (name.textContent !== line.name) name.textContent = line.name
-    const sumText = fmtMoney(line.lineTotal)
+    const sumText = line.sumText || fmtMoney(line.lineTotal)
     if (sum.textContent !== sumText) {
       sum.textContent = sumText
       node.classList.remove('flash')
       void node.offsetWidth // reflow для перезапуска анимации
       node.classList.add('flash')
     }
-    qp.textContent = `${line.qty} шт × ${fmtMoney(line.unitPrice)}`
+    if (line.qty) {
+      qp.textContent = `${line.qty} шт × ${fmtMoney(line.unitPrice)}`
+      qp.classList.remove('hidden')
+    } else {
+      qp.textContent = ''
+      qp.classList.add('hidden')
+    }
     if (line.discount > 0) {
       disc.textContent = '−' + fmtMoney(line.discount)
       disc.classList.remove('hidden')
     } else {
+      disc.textContent = ''
       disc.classList.add('hidden')
     }
     list.appendChild(node) // порядок
@@ -216,17 +310,23 @@ function renderReceipt() {
   // маска переполнения
   const totalH = state.lines.length * 108
   const maxH = list.clientHeight
-  masked = totalH > maxH && maxH > 0
+  const masked = totalH > maxH && maxH > 0
   $('rcListMask').classList.toggle('on', masked)
 }
 
 function renderTotals() {
-  animateNumber($('rcTotal'), state.total)
-  $('rcPositions').textContent = 'Позиций: ' + positionsCount()
-  const discount = state.lines.reduce((s, l) => s + l.discount, 0)
+  if (state.totalText) {
+    // итог пришёл строкой из драйвера
+    if ($('rcTotal').textContent !== state.totalText)
+      $('rcTotal').textContent = state.totalText
+  } else {
+    animateNumber($('rcTotal'), state.total)
+  }
+  $('rcPositions').textContent = 'Позиций: ' + state.lines.length
+  const numericDiscount = state.lines.reduce((s, l) => s + (l.discount || 0), 0)
   const d = $('rcDiscount')
-  if (discount > 0) {
-    d.textContent = 'Скидка: ' + fmtMoney(discount)
+  if (numericDiscount > 0) {
+    d.textContent = 'Скидка: ' + fmtMoney(numericDiscount)
     d.classList.remove('hidden')
   } else {
     d.classList.add('hidden')
@@ -538,5 +638,9 @@ render()
 setInterval(() => { adTimerTick++; syncAds() }, 1000)
 autoLoop()
 
-/* Мост для будущего драйвера: window.__pos.dispatch({type: 'line/upsert', line: {...}}) */
+/* Мост для драйвера: window.__pos.dispatch({type: 'line/upsert', line: {...}}).
+   В kiosk-режиме (запуск из драйвера) панель разработчика скрыта. */
+const KIOSK = new URLSearchParams(location.search).has('kiosk')
+if (KIOSK) document.getElementById('devPanel').style.display = 'none'
+
 window.__pos = { dispatch, getState: () => state }

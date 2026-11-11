@@ -19,6 +19,7 @@ copy /y MANIFEST.xml "%STAGE%\" >nul
 copy /y INFO.XML "%STAGE%\" >nul
 copy /y bin\Release\CustomerDisplayNative_32.dll "%STAGE%\" >nul
 copy /y bin\Release\CustomerDisplayNative_64.dll "%STAGE%\" >nul
+xcopy /y /i /e display-ui "%STAGE%\ui\" >nul
 
 if exist CustomerDisplayNative.zip del /q CustomerDisplayNative.zip
 
