@@ -46,7 +46,8 @@ button, select { font-family: inherit; }
   min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start; /* сцена от левого края: обрезка только справа */
+  overflow: hidden;
   position: relative;
   background:
     radial-gradient(1200px 600px at 50% -10%, rgba(255, 107, 36, 0.05), transparent 60%),
@@ -57,10 +58,11 @@ button, select { font-family: inherit; }
 #stage {
   width: 1920px;
   height: 1080px;
+  flex: none; /* внутри flex-родителя не сжиматься: масштаб задаёт transform */
   position: relative;
   overflow: hidden;
   background: var(--base);
-  transform-origin: center center;
+  transform-origin: left center; /* обрезка уходит вправо — чек всегда виден */
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 40px 120px rgba(0, 0, 0, 0.55);
 }
 
@@ -91,9 +93,10 @@ button, select { font-family: inherit; }
 
 #screenShopping { display: flex; }
 
-/* левая область — чек (45%) */
+/* левая область — чек: всё место, кроме картинки 3:4 справа */
 .receiptPane {
-  width: 45%;
+  flex: 1;
+  min-width: 0;
   height: 100%;
   background: var(--base);
   display: flex;
@@ -189,9 +192,10 @@ button, select { font-family: inherit; }
   letter-spacing: -0.01em;
 }
 
-/* правая область — реклама (55%) */
+/* правая область — реклама: строго 3:4 (810×1080 при базе 1920×1080) */
 .adPane {
-  width: 55%;
+  width: calc(1080px * 3 / 4);
+  flex-shrink: 0;
   height: 100%;
   position: relative;
   overflow: hidden;
