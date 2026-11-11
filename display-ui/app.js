@@ -10,7 +10,7 @@
 const $ = (id) => document.getElementById(id)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const fmtMoney = (v) =>
-  new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v) + ' ₽'
+  new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v) + ' ₸'
 
 /* ============================ СОСТОЯНИЕ ============================ */
 
@@ -265,45 +265,11 @@ const ADS = [
     template: 'productHero',
     image: 'assets/ad1.jpg',
     imageFull: 'assets/ad1_full.jpg',
-    eyebrow: 'НОВАЯ ПОДАЧА',
-    title: 'КОФЕ ИЗ СВЕЖЕЙ ОБЖАРКИ',
-    desc: 'Зерновой купаж этой недели — сварим за 90 секунд.',
-    price: '390 ₽',
-    oldPrice: '450 ₽',
-  },
-  {
-    template: 'promotion',
-    percent: '−25%',
-    title: 'НА ВСЁ МОРОЖЕНОЕ',
-    sub: 'Летняя коллекция вкусов уже в зале',
-    period: 'АКЦИЯ ДО 30 ИЮНЯ',
-  },
-  {
-    template: 'brandCampaign',
-    imageFull: 'assets/ad2_full.jpg',
-    brand: 'AURORA',
-    tag: 'ВКУС СВОБОДЫ · НОВАЯ КОЛЛЕКЦИЯ',
-  },
-  {
-    template: 'video',
-    title: 'СЕЗОН ОТКРЫТ',
-    sub: 'Готовим на живом огне — каждую неделю новое меню',
-  },
-  {
-    template: 'qrPromotion',
-    title: 'СКИДКА 15% В ПРИЛОЖЕНИИ',
-    sub: 'Установите приложение и получите скидку на первый заказ',
-    qrSeed: 'customer-display-15',
   },
   {
     template: 'productHero',
     image: 'assets/ad2.jpg',
     imageFull: 'assets/ad2_full.jpg',
-    eyebrow: 'СЕЗОННОЕ ПРЕДЛОЖЕНИЕ',
-    title: 'ВКУС, КОТОРЫЙ ОБЪЕДИНЯЕТ',
-    desc: 'Премиальная коллекция к вашему столу — только этим месяцем.',
-    price: '1 190 ₽',
-    oldPrice: '1 390 ₽',
   },
 ]
 
@@ -358,75 +324,12 @@ function qrSvg(seed) {
 }
 
 function buildAd(ad, context) {
-  // Реклама с фото = просто картинка на всю область, без текста поверх
-  if (ad.imageFull && context === 'waiting') {
-    const full = el('div', 'ad adImgFull')
-    const img = el('img', 'adImg', '')
-    img.src = ad.imageFull
-    full.appendChild(img)
-    return full
-  }
-  if (ad.image) {
-    // правая панель режима покупки: портретная картинка на всю панель
-    const pane = el('div', 'ad adImgFull')
-    const img = el('img', 'adImg', '')
-    img.src = ad.image
-    pane.appendChild(img)
-    return pane
-  }
-
-  const cls = {
-    productHero: 'adProductHero',
-    promotion: 'adPromotion',
-    brandCampaign: 'adBrand',
-    video: 'adVideo',
-    qrPromotion: 'adQr',
-  }[ad.template]
-  const root = el('div', 'ad ' + cls)
-
-  switch (ad.template) {
-    case 'productHero':
-      root.appendChild(phArt('ФОТО ТОВАРА'))
-      root.appendChild(
-        el('div', 'phText',
-          `<div class="adEyebrow">${ad.eyebrow}</div>` +
-          `<div class="adTitle">${ad.title}</div>` +
-          `<div class="adDesc">${ad.desc}</div>` +
-          `<div class="adPriceRow"><span class="adPrice">${ad.price}</span>` +
-          `<span class="adOldPrice">${ad.oldPrice}</span></div>`),
-      )
-      break
-    case 'promotion':
-      root.appendChild(el('div', 'adPercent', ad.percent))
-      root.appendChild(el('div', 'adPromoTitle', ad.title))
-      root.appendChild(el('div', 'adPromoSub', ad.sub))
-      root.appendChild(el('div', 'adPeriod', ad.period))
-      break
-    case 'brandCampaign':
-      root.appendChild(el('div', 'adBrandArt'))
-      root.appendChild(el('div', 'adBrandLogo', '<div class="logo"><span class="logoMark"></span><span class="logoText">МАГАЗИН</span></div>'))
-      root.appendChild(el('div', 'adBrandMark', ad.brand))
-      root.appendChild(el('div', 'adBrandTag', ad.tag))
-      break
-    case 'video':
-      root.appendChild(el('div', 'adVideoArt', '<div class="blob b1"></div><div class="blob b2"></div>'))
-      root.appendChild(
-        el('div', 'adVideoOverlay',
-          `<div class="adVideoTitle">${ad.title}</div><div class="adVideoSub">${ad.sub}</div>`),
-      )
-      root.appendChild(el('div', 'adVideoBadge', '<span class="dot"></span>ВИДЕО · БЕЗ ЗВУКА'))
-      break
-    case 'qrPromotion':
-      root.appendChild(
-        el('div', 'adQrText',
-          `<div class="adEyebrow">ПРОМО</div>` +
-          `<div class="adTitle">${ad.title}</div>` +
-          `<div class="adDesc">${ad.sub}</div>` +
-          `<div class="adQrHint"><span class="arr">→</span> Наведите камеру телефона</div>`),
-      )
-      root.appendChild(el('div', 'adQrCard', qrSvg(ad.qrSeed)))
-      break
-  }
+  // Реклама = просто картинка на всю область (WAITING — полноэкранная,
+  // SHOPPING — портретная версия на всю правую панель), без текста поверх
+  const root = el('div', 'ad adImgFull')
+  const img = el('img', 'adImg', '')
+  img.src = context === 'waiting' ? (ad.imageFull || ad.image) : (ad.image || ad.imageFull)
+  root.appendChild(img)
   return root
 }
 
@@ -618,8 +521,12 @@ function wireDevPanel() {
 
 function fitStage() {
   const wrap = $('stageWrap')
-  const scale = Math.min(wrap.clientWidth / 1920, wrap.clientHeight / 1080)
-  $('stage').style.transform = `scale(${scale})`
+  // cover: заполняем всё окно (без чёрных полей), обрезая излишек;
+  // начало координат слева — чек всегда виден целиком, обрезка уходит в рекламу
+  const scale = Math.max(wrap.clientWidth / 1920, wrap.clientHeight / 1080)
+  const stage = $('stage')
+  stage.style.transform = `scale(${scale})`
+  stage.style.transformOrigin = 'left center'
 }
 window.addEventListener('resize', fitStage)
 
