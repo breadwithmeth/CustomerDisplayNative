@@ -16,16 +16,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const fmtMoney = (v) =>
   new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v) + ' ₸'
 
+/** Из строки БПО «Наименование 1 050,00 тг.» выделяет наименование и сумму */
+function splitItemLine(line) {
+  const m = line.match(/^(.*?)[\s\u00A0]*((?:\d[\d\s\u00A0]*[.,]\d{2})\s*(?:тг|₸|₽|тенге)?\.?)\s*$/i)
+  if (m && m[1].trim()) return { name: m[1].replace(/[|\-–—]\s*$/, '').trim(), sum: m[2].trim() }
+  return { name: line.trim(), sum: '' }
+}
+
+let itemSeq = 0
+
 /* ============================ СОСТОЯНИЕ ============================ */
 
 const state = {
-  screen: 'WAITING',   // WAITING | SHOPPING | PAYMENT | SUCCESS | ERROR | QR | MEDIA
+  screen: 'WAITING',   // WAITING | SHOPPING | PAYMENT | SUCCESS | ERROR | QR | MEDIA | MESSAGE
   lines: [],           // { id, name, qty, unitPrice, discount, lineTotal, sumText? }
   total: 0,
   totalText: '',       // итог строкой (из драйвера), приоритетнее total
   method: null,        // 'card' | 'cash'
   success: null,       // { total, positions }
   error: null,
+  message: null,       // текст сообщения (приветствие/простой/отмена)
   qrDataUrl: null,     // data:image/png;base64,... (QR-оплата из драйвера)
   mediaUrl: null,      // url медиафайла (реклама из драйвера)
 }
@@ -69,7 +79,8 @@ function applyEvent(event) {
       break
     }
     case 'check/clear': {
-      if (state.screen === 'PAYMENT' || state.screen === 'SUCCESS') return
+      // сброс всегда: «ОТМЕНА ОПЛАТЫ»/«КАССА НЕ РАБОТАЕТ» из БПО должны
+      // очищать дисплей даже посреди оплаты
       state.lines = []
       state.total = 0
       state.totalText = ''
@@ -102,6 +113,40 @@ function applyEvent(event) {
       break
     }
     // ---- события из драйвера (WebView2-интеграция) ----
+    case 'check/item': {
+      if (state.screen === 'PAYMENT' || state.screen === 'SUCCESS') return
+      const split = splitItemLine(event.name || '')
+      if (!split.name) return
+      // дубликат последней строки пропускаем (БПО может пересылать)
+      const last = state.lines[state.lines.length - 1]
+      if (last && last.name === split.name && (last.sumText || '') === split.sum) return
+      state.lines.push({
+        id: 'i' + (++itemSeq) + '-' + Date.now(),
+        name: split.name,
+        qty: null, unitPrice: null, discount: null, lineTotal: null,
+        sumText: split.sum,
+      })
+      state.screen = 'SHOPPING'
+      break
+    }
+    case 'check/total': {
+      if (state.screen === 'PAYMENT' || state.screen === 'SUCCESS') return
+      state.totalText = event.text || ''
+      state.screen = 'SHOPPING'
+      break
+    }
+    case 'message/show': {
+      state.message = event.text || ''
+      state.screen = 'MESSAGE'
+      setTimeout(() => {
+        if (state.screen === 'MESSAGE' && state.message === event.text) {
+          state.message = null
+          state.screen = 'WAITING'
+          render()
+        }
+      }, 4500)
+      break
+    }
     case 'op/status': {
       // 0 — операция не выполняется, 1 — выполняется, 2 — не выполнена
       if (event.code === 1 && state.lines.length > 0) {
@@ -217,7 +262,7 @@ let currentScreen = ''
 function setScreen(name) {
   if (currentScreen === name) return
   currentScreen = name
-  for (const id of ['screenWaiting', 'screenShopping', 'screenPayment', 'screenSuccess', 'screenError', 'screenQr', 'screenMedia']) {
+  for (const id of ['screenWaiting', 'screenShopping', 'screenPayment', 'screenSuccess', 'screenError', 'screenQr', 'screenMedia', 'screenMessage']) {
     $(id).classList.toggle('active', id === 'screen' + name.charAt(0) + name.slice(1).toLowerCase())
   }
   $('devScreen').textContent = name
@@ -232,7 +277,13 @@ function render() {
   renderError()
   renderQr()
   renderMedia()
+  renderMessage()
   syncAds()
+}
+
+function renderMessage() {
+  if (state.screen !== 'MESSAGE') return
+  $('msgText').textContent = state.message || ''
 }
 
 function renderQr() {
@@ -320,9 +371,13 @@ function renderReceipt() {
 
 function renderTotals() {
   if (state.totalText) {
-    // итог пришёл строкой из драйвера
-    if ($('rcTotal').textContent !== state.totalText)
-      $('rcTotal').textContent = state.totalText
+    // итог пришёл строкой из драйвера — гасим активную анимацию числа,
+    // иначе её кадры перезаписывают textContent
+    const el = $('rcTotal')
+    const prev = numAnims.get(el)
+    if (prev) { cancelAnimationFrame(prev.raf); numAnims.delete(el) }
+    if (el.textContent !== state.totalText)
+      el.textContent = state.totalText
   } else {
     animateNumber($('rcTotal'), state.total)
   }
@@ -507,6 +562,7 @@ tickClock()
 
 /* ============================ ДЕМО-ДАННЫЕ ============================ */
 
+
 const DEMO_ITEMS = [
   { id: 'sku-101', name: 'Энергетический напиток Monster 0.5 жб', qty: 1, unitPrice: 1050, discount: 0 },
   { id: 'sku-102', name: 'Кофе латте на овсяном молоке', qty: 2, unitPrice: 690, discount: 138 },
@@ -515,7 +571,6 @@ const DEMO_ITEMS = [
   { id: 'sku-105', name: 'Шоколадный батончик 60 г', qty: 2, unitPrice: 320, discount: 64 },
 ]
 
-let itemSeq = 0
 function addRandomItem(withDiscount = false) {
   const base = DEMO_ITEMS[itemSeq % DEMO_ITEMS.length]
   itemSeq++

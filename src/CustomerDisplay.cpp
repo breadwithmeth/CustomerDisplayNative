@@ -12,7 +12,7 @@
 // Регистрация компоненты
 static const wchar_t g_kClassNames[] = L"CustomerDisplay";
 static const wchar_t* g_extensionName = L"CustomerDisplayNative";
-static const wchar_t* g_extensionVersion = L"1.1.0.2";
+static const wchar_t* g_extensionVersion = L"1.1.1.0";
 static const wchar_t* g_driverName = L"Дисплей покупателя (монитор)";
 static const wchar_t* g_driverDescription =
     L"Вывод информации на дисплей покупателя. В качестве дисплея используется "
@@ -217,9 +217,16 @@ std::vector<uint8_t> Base64Decode(const std::wstring& in)
 
 std::wstring ToLowerRu(const std::wstring& s)
 {
+    // towlower в C-локали не опускает кириллицу — приводим вручную
     std::wstring out;
+    out.reserve(s.size());
     for (wchar_t c : s)
-        out += (wchar_t)::towlower(c);
+    {
+        if (c >= L'A' && c <= L'Z') c = c - L'A' + L'a';
+        else if (c >= 0x0410 && c <= 0x042F) c += 0x20; // А..Я → а..я
+        else if (c == 0x0401) c = 0x0451;               // Ё → ё
+        out += c;
+    }
     return out;
 }
 
@@ -1582,13 +1589,57 @@ bool CustomerDisplay::mStringOutputOnCustomerDisplay(tVariant* retVal, tVariant*
 
     cdp::DisplayContent content;
     content.mode = cdp::ScreenMode::Lines;
-    cdp::BuildRowsFromLines(content, std::move(lines));
+    cdp::BuildRowsFromLines(content, lines);
     dev->window->SetContent(content);
     dev->lastContent = content;
     LogLine(L"WINDOW StringOutput: " + dev->window->DescribeState());
 
-    // интерфейс покупателя (WebView2): чек готовыми строками
-    dev->window->PostPosEvent(BuildCheckLinesJs(content.rows, content.hasTotal));
+    // WebView2-интерфейс: семантика БПО — каждая строка = событие чека.
+    // Классификация: приветствие/простой → сброс и заставка; «ИТОГО…» → сумма;
+    // остальное — позиция чека (накапливается).
+    if (dev->window->IsWebviewActive())
+    {
+        std::wstring js = L"window.__pos&&(function(){var d=window.__pos.dispatch;";
+        bool idle = false, cancel = false, total = false;
+        std::wstring message;
+        std::vector<std::wstring> items;
+        for (const auto& line : lines)
+        {
+            const std::wstring low = ToLowerRu(line);
+            if (low.find(L"добро пожаловать") != std::wstring::npos ||
+                low.find(L"касса не работает") != std::wstring::npos ||
+                low.find(L"сервисный режим") != std::wstring::npos)
+            {
+                idle = true;
+                if (message.empty()) message = line;
+            }
+            else if (low.find(L"отмена") != std::wstring::npos)
+            {
+                cancel = true;
+                if (message.empty()) message = line;
+            }
+            else if (low.find(L"итог") != std::wstring::npos)
+            {
+                total = true;
+                message.clear();
+                js += L"d({type:'check/total',text:\"" + JsonEscape(line) + L"\"});";
+            }
+            else
+            {
+                items.push_back(line);
+            }
+        }
+        if (idle || cancel)
+        {
+            js += L"d({type:'check/clear'});";
+            if (!message.empty())
+                js += L"d({type:'message/show',text:\"" + JsonEscape(message) + L"\"});";
+        }
+        for (const auto& it : items)
+            js += L"d({type:'check/item',name:\"" + JsonEscape(it) + L"\"});";
+        js += L"})();";
+        dev->window->PostPosEvent(js);
+    }
 
     setBoolToTVariant(retVal, true);
     setError(0, L"");
