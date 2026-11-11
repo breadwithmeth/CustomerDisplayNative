@@ -697,8 +697,22 @@ render()
 setInterval(() => { adTimerTick++; syncAds() }, 1000)
 if (autoDemo) autoLoop()
 
-/* Мост для драйвера: window.__pos.dispatch({type: 'line/upsert', line: {...}}).
-   В kiosk-режиме (запуск из драйвера) панель разработчика скрыта. */
+/* Мост для драйвера: события приходят двумя путями —
+   1) PostWebMessageAsJson (штатный канал WebView2, основной)
+   2) ExecuteScript → window.__pos.dispatch(...) (резервный) */
 if (KIOSK) document.getElementById('devPanel').style.display = 'none'
+
+try {
+  if (window.chrome && window.chrome.webview) {
+    window.chrome.webview.addEventListener('message', (e) => {
+      try {
+        const data = e.data
+        if (data && Array.isArray(data.events)) data.events.forEach((x) => { if (x && x.type) dispatch(x) })
+        else if (Array.isArray(data)) data.forEach((x) => { if (x && x.type) dispatch(x) })
+        else if (data && data.type) dispatch(data)
+      } catch (err) { /* игнор */ }
+    })
+  }
+} catch (e) { /* не WebView2 — просто браузерный прототип */ }
 
 window.__pos = { dispatch, getState: () => state }

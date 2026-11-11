@@ -731,8 +731,13 @@ void FlushPendingJs(Impl* impl)
     ::EnterCriticalSection(&impl->lock);
     batch.swap(impl->pendingJs);
     ::LeaveCriticalSection(&impl->lock);
-    for (const auto& js : batch)
-        impl->wv->ExecuteScript(js.c_str(), nullptr);
+    for (const auto& json : batch)
+    {
+        HRESULT hr = impl->wv->PostWebMessageAsJson(json.c_str());
+        wchar_t b[96];
+        ::swprintf(b, 96, L"flush dispatch hr=0x%08X json=%.60s", (unsigned)hr, json.c_str());
+        WvLog(b);
+    }
 }
 
 /** Подключение готового контроллера: настройки, хосты, навигация (GUI-поток) */
@@ -789,6 +794,17 @@ HRESULT AttachWebview(Impl* impl, ICoreWebView2Controller* ctrl)
         Callback<ICoreWebView2NavigationCompletedEventHandler>(
             [impl](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
                 impl->wvReady = true;
+                // диагностика: есть ли мост на странице
+                impl->wv->ExecuteScript(
+                    L"String(!!window.__pos)+'/'+String(!!(window.chrome&&window.chrome.webview))",
+                    Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+                        [impl](HRESULT hr, LPCWSTR res) -> HRESULT {
+                            wchar_t b[128];
+                            ::swprintf(b, 128, L"probe __pos/chrome.webview = %s (hr=0x%08X)",
+                                       res ? res : L"?", (unsigned)hr);
+                            WvLog(b);
+                            return S_OK;
+                        }).Get());
                 WvLog(L"navigation completed — интерфейс покупателя активен");
                 FlushPendingJs(impl);
                 return S_OK;
@@ -1061,8 +1077,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             ::EnterCriticalSection(&impl->lock);
             batch.swap(impl->pendingJs);
             ::LeaveCriticalSection(&impl->lock);
-            for (const auto& js : batch)
-                impl->wv->ExecuteScript(js.c_str(), nullptr);
+            for (const auto& json : batch)
+            {
+                HRESULT hr = impl->wv->PostWebMessageAsJson(json.c_str());
+                wchar_t b[128];
+                ::swprintf(b, 128, L"dispatch hr=0x%08X json=%.80s", (unsigned)hr, json.c_str());
+                WvLog(b);
+            }
         }
         return 0;
 
@@ -1308,7 +1329,7 @@ const std::wstring& DisplayWindow::LastError() const
     return m_impl->lastError;
 }
 
-void DisplayWindow::PostPosEvent(const std::wstring& jsDispatchCall)
+void DisplayWindow::PostPosEvent(const std::wstring& jsonEvent)
 {
     Impl* impl = m_impl;
     ::EnterCriticalSection(&impl->lock);
@@ -1316,7 +1337,23 @@ void DisplayWindow::PostPosEvent(const std::wstring& jsDispatchCall)
         ::LeaveCriticalSection(&impl->lock);
         return;
     }
-    impl->pendingJs.push_back(L"window.__pos&&window.__pos.dispatch(" + jsDispatchCall + L");");
+    impl->pendingJs.push_back(jsonEvent);
+    HWND hwnd = impl->hwnd;
+    ::LeaveCriticalSection(&impl->lock);
+    if (hwnd)
+        ::PostMessageW(hwnd, WM_APP_POS, 0, 0);
+}
+
+void DisplayWindow::PostPosEvents(const std::vector<std::wstring>& jsonEvents)
+{
+    Impl* impl = m_impl;
+    ::EnterCriticalSection(&impl->lock);
+    if (impl->gdiFallback) {
+        ::LeaveCriticalSection(&impl->lock);
+        return;
+    }
+    for (const auto& j : jsonEvents)
+        impl->pendingJs.push_back(j);
     HWND hwnd = impl->hwnd;
     ::LeaveCriticalSection(&impl->lock);
     if (hwnd)

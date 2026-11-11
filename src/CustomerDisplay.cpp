@@ -391,8 +391,10 @@ std::wstring ParamToLogString(tVariant* p)
 
 std::wstring JsonEscape(const std::wstring& s)
 {
+    // весь не-ASCII экранируем \uXXXX — канал PostWebMessageAsJson
+    // принимает только ASCII-безопасный JSON
     std::wstring out;
-    out.reserve(s.size() + 8);
+    out.reserve(s.size() * 2);
     wchar_t buf[8];
     for (wchar_t c : s)
     {
@@ -404,7 +406,7 @@ std::wstring JsonEscape(const std::wstring& s)
         case L'\r': out += L"\\r"; break;
         case L'\t': out += L"\\t"; break;
         default:
-            if (c < 0x20)
+            if (c < 0x20 || c > 0x7E)
             {
                 ::swprintf(buf, 8, L"\\u%04x", (unsigned)c);
                 out += buf;
@@ -546,7 +548,7 @@ std::wstring UrlEncodeName(const std::wstring& name)
 std::wstring BuildCheckLinesJs(const std::vector<std::pair<std::wstring, std::wstring>>& rows,
                                bool hasTotal)
 {
-    std::wstring js = L"window.__pos&&window.__pos.dispatch({type:'check/lines',lines:[";
+    std::wstring js = L"{\"events\":[";
     for (size_t i = 0; i < rows.size(); ++i)
     {
         const bool isTotal = hasTotal && i + 1 == rows.size();
@@ -554,7 +556,7 @@ std::wstring BuildCheckLinesJs(const std::vector<std::pair<std::wstring, std::ws
               JsonEscape(rows[i].second) + L"\"" + (isTotal ? L",total:true" : L"") + L"}";
         if (i + 1 < rows.size()) js += L",";
     }
-    js += L"]});";
+    js += L"]}";
     return js;
 }
 
@@ -1423,7 +1425,7 @@ bool CustomerDisplay::mEquipmentTest(tVariant* retVal, tVariant* equipmentType,
     if (dev && dev->window && dev->window->IsRunning())
     {
         if (dev->window->IsWebviewActive())
-            dev->window->PostPosEvent(L"window.__pos&&window.__pos.dispatch({type:'demo/run'});");
+            dev->window->PostPosEvent(L"{\"type\":\"demo/run\"}");
         else
             RunDemo(dev->window.get());
         setWStringToTVariant(description,
@@ -1597,12 +1599,13 @@ bool CustomerDisplay::mStringOutputOnCustomerDisplay(tVariant* retVal, tVariant*
     // WebView2-интерфейс: семантика БПО — каждая строка = событие чека.
     // Классификация: приветствие/простой → сброс и заставка; «ИТОГО…» → сумма;
     // остальное — позиция чека (накапливается).
+    // Каждое событие — отдельный короткий ASCII JSON-объект (канал
+    // PostWebMessageAsJson принимает их надёжно).
     if (dev->window->IsWebviewActive())
     {
-        std::wstring js = L"window.__pos&&(function(){var d=window.__pos.dispatch;";
-        bool idle = false, cancel = false, total = false;
+        std::vector<std::wstring> events;
+        bool idle = false, cancel = false;
         std::wstring message;
-        std::vector<std::wstring> items;
         for (const auto& line : lines)
         {
             const std::wstring low = ToLowerRu(line);
@@ -1620,25 +1623,24 @@ bool CustomerDisplay::mStringOutputOnCustomerDisplay(tVariant* retVal, tVariant*
             }
             else if (low.find(L"итог") != std::wstring::npos)
             {
-                total = true;
                 message.clear();
-                js += L"d({type:'check/total',text:\"" + JsonEscape(line) + L"\"});";
+                events.push_back(L"{\"type\":\"check/total\",\"text\":\"" + JsonEscape(line) + L"\"}");
             }
             else
             {
-                items.push_back(line);
+                events.push_back(L"{\"type\":\"check/item\",\"name\":\"" + JsonEscape(line) + L"\"}");
             }
         }
         if (idle || cancel)
         {
-            js += L"d({type:'check/clear'});";
+            std::vector<std::wstring> pre;
+            pre.push_back(L"{\"type\":\"check/clear\"}");
             if (!message.empty())
-                js += L"d({type:'message/show',text:\"" + JsonEscape(message) + L"\"});";
+                pre.push_back(L"{\"type\":\"message/show\",\"text\":\"" + JsonEscape(message) + L"\"}");
+            pre.insert(pre.end(), events.begin(), events.end());
+            events.swap(pre);
         }
-        for (const auto& it : items)
-            js += L"d({type:'check/item',name:\"" + JsonEscape(it) + L"\"});";
-        js += L"})();";
-        dev->window->PostPosEvent(js);
+        dev->window->PostPosEvents(events);
     }
 
     setBoolToTVariant(retVal, true);
@@ -1662,7 +1664,7 @@ bool CustomerDisplay::mClearCustomerDisplay(tVariant* retVal, tVariant* deviceId
     welcome.mode = cdp::ScreenMode::Welcome;
     dev->window->SetContent(welcome);
     dev->lastContent = welcome;
-    dev->window->PostPosEvent(L"window.__pos&&window.__pos.dispatch({type:'check/clear'});");
+    dev->window->PostPosEvent(L"{""type"":""check/clear""}");
     setBoolToTVariant(retVal, true);
     setError(0, L"");
     return true;
@@ -1738,8 +1740,8 @@ bool CustomerDisplay::mAddMediaFile(tVariant* retVal, tVariant* deviceId,
     dev->window->SetContent(content);
     dev->lastContent = content;
     dev->window->PostPosEvent(
-        L"window.__pos&&window.__pos.dispatch({type:'media/show',url:'https://app.media/" +
-        UrlEncodeName(SanitizeFileName(name)) + L"'});");
+        L"{\"type\":\"media/show\",\"url\":\"https://app.media/" +
+        UrlEncodeName(SanitizeFileName(name)) + L"\"}");
     setBoolToTVariant(retVal, true);
     setError(0, L"");
     return true;
@@ -1790,8 +1792,8 @@ bool CustomerDisplay::mQrCodeOutputOnCustomerDisplay(tVariant* retVal, tVariant*
         dataUrl = MakeQrDataUrl(value);
     if (!dataUrl.empty())
         dev->window->PostPosEvent(
-            L"window.__pos&&window.__pos.dispatch({type:'qr/show',dataUrl:\"" +
-            JsonEscape(dataUrl) + L"\"});");
+            L"{\"type\":\"qr/show\",\"dataUrl\":\"" +
+            JsonEscape(dataUrl) + L"\"}");
 
     setBoolToTVariant(retVal, true);
     setError(0, L"");
@@ -1816,8 +1818,8 @@ bool CustomerDisplay::mDisplayOperationStatus(tVariant* retVal, tVariant* device
     content.statusCode = std::min(2L, std::max(0L, getLongParam(operationStatus, 0, 0)));
     dev->window->SetContent(content);
     dev->lastContent = content;
-    wchar_t statusBuf[24];
-    ::swprintf(statusBuf, 24, L"{type:'op/status',code:%ld}", content.statusCode);
+    wchar_t statusBuf[64];
+    ::swprintf(statusBuf, 64, L"{\"type\":\"op/status\",\"code\":%ld}", content.statusCode);
     dev->window->PostPosEvent(statusBuf);
     setBoolToTVariant(retVal, true);
     setError(0, L"");

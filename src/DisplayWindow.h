@@ -83,9 +83,12 @@ public:
     // Установить содержимое экрана и перерисовать (GDI-фоллбэк).
     void SetContent(const DisplayContent& content);
 
-    // Событие интерфейса покупателя — готовый JS-вызов dispatch(...)
-    // (потокобезопасно; в GDI-фоллбэке игнорируется)
-    void PostPosEvent(const std::wstring& jsDispatchCall);
+    // Событие интерфейса покупателя — JSON-объект (потокобезопасно;
+    // в GDI-фоллбэке игнорируется)
+    void PostPosEvent(const std::wstring& jsonEvent);
+
+    // Несколько событий одним сообщением (порядок сохраняется)
+    void PostPosEvents(const std::vector<std::wstring>& jsonEvents);
 
     // Активен ли WebView2 (иначе — GDI-фоллбэк)
     bool IsWebviewActive() const;
