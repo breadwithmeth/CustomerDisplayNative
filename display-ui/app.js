@@ -263,6 +263,8 @@ function renderError() {
 const ADS = [
   {
     template: 'productHero',
+    image: 'assets/ad1.jpg',
+    imageFull: 'assets/ad1_full.jpg',
     eyebrow: 'НОВАЯ ПОДАЧА',
     title: 'КОФЕ ИЗ СВЕЖЕЙ ОБЖАРКИ',
     desc: 'Зерновой купаж этой недели — сварим за 90 секунд.',
@@ -278,6 +280,7 @@ const ADS = [
   },
   {
     template: 'brandCampaign',
+    imageFull: 'assets/ad2_full.jpg',
     brand: 'AURORA',
     tag: 'ВКУС СВОБОДЫ · НОВАЯ КОЛЛЕКЦИЯ',
   },
@@ -291,6 +294,16 @@ const ADS = [
     title: 'СКИДКА 15% В ПРИЛОЖЕНИИ',
     sub: 'Установите приложение и получите скидку на первый заказ',
     qrSeed: 'customer-display-15',
+  },
+  {
+    template: 'productHero',
+    image: 'assets/ad2.jpg',
+    imageFull: 'assets/ad2_full.jpg',
+    eyebrow: 'СЕЗОННОЕ ПРЕДЛОЖЕНИЕ',
+    title: 'ВКУС, КОТОРЫЙ ОБЪЕДИНЯЕТ',
+    desc: 'Премиальная коллекция к вашему столу — только этим месяцем.',
+    price: '1 190 ₽',
+    oldPrice: '1 390 ₽',
   },
 ]
 
@@ -344,7 +357,24 @@ function qrSvg(seed) {
   return `<svg viewBox="0 0 ${size} ${size}" fill="#111214" shape-rendering="crispEdges">${rects}</svg>`
 }
 
-function buildAd(ad) {
+function buildAd(ad, context) {
+  // Реклама с фото = просто картинка на всю область, без текста поверх
+  if (ad.imageFull && context === 'waiting') {
+    const full = el('div', 'ad adImgFull')
+    const img = el('img', 'adImg', '')
+    img.src = ad.imageFull
+    full.appendChild(img)
+    return full
+  }
+  if (ad.image) {
+    // правая панель режима покупки: портретная картинка на всю панель
+    const pane = el('div', 'ad adImgFull')
+    const img = el('img', 'adImg', '')
+    img.src = ad.image
+    pane.appendChild(img)
+    return pane
+  }
+
   const cls = {
     productHero: 'adProductHero',
     promotion: 'adPromotion',
@@ -353,6 +383,7 @@ function buildAd(ad) {
     qrPromotion: 'adQr',
   }[ad.template]
   const root = el('div', 'ad ' + cls)
+
   switch (ad.template) {
     case 'productHero':
       root.appendChild(phArt('ФОТО ТОВАРА'))
@@ -401,7 +432,8 @@ function buildAd(ad) {
 
 function setAd(hostId, index) {
   const host = $(hostId)
-  const ad = buildAd(ADS[index % ADS.length])
+  const context = hostId === 'waitingAdLayers' ? 'waiting' : 'shopping'
+  const ad = buildAd(ADS[index % ADS.length], context)
   ad.classList.add('adLayer')
   host.appendChild(ad)
   requestAnimationFrame(() => requestAnimationFrame(() => ad.classList.add('show')))
