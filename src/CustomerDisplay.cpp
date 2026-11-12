@@ -70,7 +70,7 @@ std::wstring WcharPtrToWstring(const WCHAR_T* s)
 
 static const wchar_t g_kClassNames[] = L"CustomerDisplay";
 static const wchar_t* g_extensionName = L"CustomerDisplayNative";
-const wchar_t* g_extensionVersion = L"1.1.3.1";
+const wchar_t* g_extensionVersion = L"1.1.3.2";
 static const wchar_t* g_driverName = L"Дисплей покупателя (монитор)";
 static const wchar_t* g_driverDescription =
     L"Вывод информации на дисплей покупателя. В качестве дисплея используется "
@@ -1096,6 +1096,30 @@ void CustomerDisplay::setError(long code, const std::wstring& text)
 /////////////////////////////////////////////////////////////////////////////
 // Устройства
 //---------------------------------------------------------------------------//
+namespace {
+// Параметры, влияющие на окно дисплея (прочие — метаданные контракта)
+bool IsWindowSettingName(const std::wstring& name)
+{
+    static const wchar_t* const names[] = {
+        L"MonitorIndex", L"Fullscreen", L"BarHeightPct", L"FontScale",
+        L"BackgroundColor", L"TextColor", L"AccentColor", L"SoundEnabled",
+    };
+    for (const wchar_t* n : names)
+        if (_wcsicmp(name.c_str(), n) == 0)
+            return true;
+    return false;
+}
+
+bool HasWindowSettings(const std::map<std::wstring, std::wstring>& params)
+{
+    for (const auto& kv : params)
+        if (IsWindowSettingName(kv.first))
+            return true;
+    return false;
+}
+} // anonymous namespace
+
+//---------------------------------------------------------------------------//
 CustomerDisplay::Device* CustomerDisplay::FindDevice(const std::wstring& id)
 {
     for (auto& d : m_devices)
@@ -1147,6 +1171,17 @@ CustomerDisplay::Device* CustomerDisplay::ResolveDevice(const std::wstring& id,
         EnsureDirectory(lazy->mediaDir);
 
         lazy->window.reset(new cdp::DisplayWindow());
+        lazy->hasExplicitSettings = HasWindowSettings(m_legacyParams);
+        // одно окно на кассу: если дисплей уже открыт другим экземпляром —
+        // своё не создаём
+        if (TryUseForeignWindow(lazy.get()))
+        {
+            Device* rawLazy = lazy.get();
+            if (rawLazy->id.empty())
+                rawLazy->id = GenerateDeviceId();
+            m_devices.emplace_back(std::move(lazy));
+            return rawLazy;
+        }
         if (!lazy->window->Start(lazy->settings, L"Дисплей покупателя", lazy->mediaDir))
             return nullptr;
         cdp::DisplayContent welcome;
@@ -1172,12 +1207,52 @@ bool CustomerDisplay::EnsureDeviceWindow(Device* dev)
         dev->window.reset(new cdp::DisplayWindow());
     if (!dev->window->IsRunning())
     {
+        // одно окно на кассу: дисплей уже открыт другим экземпляром
+        // компоненты — пользуемся им, своё не создаём
+        if (TryUseForeignWindow(dev))
+            return true;
+
         // окно закрыли вручную (панель задач / Alt+F4) — переоткрываем
         if (!dev->window->Start(dev->settings, L"Дисплей покупателя", dev->mediaDir))
             return false;
         dev->window->SetContent(dev->lastContent);
         LogLine(L"WINDOW reopen: " + dev->window->DescribeState());
     }
+    return true;
+}
+//---------------------------------------------------------------------------//
+bool CustomerDisplay::TryUseForeignWindow(Device* dev)
+{
+    if (!dev)
+        return false;
+    // служебный рубильник (смоук-тест/отладка): разрешаем второе окно
+    wchar_t opt[8] = { 0 };
+    if (::GetEnvironmentVariableW(L"CDN_ALLOW_SECOND_WINDOW", opt, 8) > 0 &&
+        (opt[0] == L'1' || opt[0] == L't' || opt[0] == L'T'))
+        return false;
+    HWND foreign = cdp::FindForeignDisplayWindow();
+    if (!foreign)
+    {
+        dev->usesForeignWindow = false;
+        return false;
+    }
+    // чужое окно на другом мониторе — это отдельный дисплей второй кассы:
+    // открываем своё как обычно
+    if (!cdp::WindowOnTargetMonitor(foreign, dev->settings))
+    {
+        dev->usesForeignWindow = false;
+        return false;
+    }
+    // настройки передаёт только экземпляр с явными параметрами БПО:
+    // «безпараметрический» не должен перекрывать настроенное окно дефолтами
+    bool pushed = dev->hasExplicitSettings &&
+                  cdp::SendSettingsToDisplayWindow(foreign, dev->settings);
+    bool wasForeign = dev->usesForeignWindow;
+    dev->usesForeignWindow = true;
+    if (!wasForeign)
+        LogLine(pushed
+            ? L"WINDOW foreign: дисплей уже открыт другим экземпляром — настройки переданы, своё окно не создаём"
+            : L"WINDOW foreign: дисплей уже открыт другим экземпляром — пользуемся им");
     return true;
 }
 //---------------------------------------------------------------------------//
@@ -1362,6 +1437,7 @@ bool CustomerDisplay::mConnectEquipment(tVariant* retVal, tVariant* deviceId,
     dev->rows = 10;
     std::wstring settingsError; // параметры опциональны — ошибки быть не может
     ParseSettings(params, dev->settings, dev->columns, dev->rows, settingsError);
+    dev->hasExplicitSettings = HasWindowSettings(params);
 
     dev->id = GenerateDeviceId();
 
@@ -1376,7 +1452,21 @@ bool CustomerDisplay::mConnectEquipment(tVariant* retVal, tVariant* deviceId,
     EnsureDirectory(dev->mediaDir);
 
     dev->window.reset(new cdp::DisplayWindow());
-    if (!dev->window->Start(dev->settings, L"Дисплей покупателя", dev->mediaDir))
+    // одно окно на кассу: дисплей уже открыт другим экземпляром компоненты —
+    // настраиваем его, своё не создаём
+    if (TryUseForeignWindow(dev))
+    {
+        LogLine(L"WINDOW ConnectEquipment: чужое окно (второго не создаём)");
+    }
+    else if (dev->window->Start(dev->settings, L"Дисплей покупателя", dev->mediaDir))
+    {
+        cdp::DisplayContent welcome;
+        welcome.mode = cdp::ScreenMode::Welcome;
+        dev->window->SetContent(welcome);
+        dev->lastContent = welcome;
+        LogLine(L"WINDOW ConnectEquipment: " + dev->window->DescribeState());
+    }
+    else
     {
         std::wstring err = dev->window->LastError();
         setError(102, L"Не удалось открыть окно дисплея" +
@@ -1385,12 +1475,6 @@ bool CustomerDisplay::mConnectEquipment(tVariant* retVal, tVariant* deviceId,
         setBoolToTVariant(retVal, false);
         return true;
     }
-
-    cdp::DisplayContent welcome;
-    welcome.mode = cdp::ScreenMode::Welcome;
-    dev->window->SetContent(welcome);
-    dev->lastContent = welcome;
-    LogLine(L"WINDOW ConnectEquipment: " + dev->window->DescribeState());
 
     ::EnterCriticalSection(&m_devicesLock);
     m_devices.emplace_back(dev);
@@ -2027,6 +2111,10 @@ bool CustomerDisplay::mSetParameterLegacy(tVariant* retVal, tVariant* name, tVar
 
     ::EnterCriticalSection(&m_devicesLock);
     m_legacyParams[paramName] = paramValue;
+    // настройка окна пришла явно — экземпляр «имеет право» переконфигурировать
+    // чужое окно (одно окно на кассу)
+    if (IsWindowSettingName(paramName) && m_legacyDevice)
+        m_legacyDevice->hasExplicitSettings = true;
     // если дисплей уже открыт — применяем настройки на лету
     Device* dev = m_legacyDevice.get();
     if (dev && dev->window && dev->window->IsRunning())
@@ -2058,6 +2146,8 @@ bool CustomerDisplay::mOpenLegacy(tVariant* retVal, tVariant* id)
         auto params = xmlutil::ParseParameters(param);
         for (const auto& kv : params)
             m_legacyParams[kv.first] = kv.second;
+        if (HasWindowSettings(params) && m_legacyDevice)
+            m_legacyDevice->hasExplicitSettings = true;
     }
     if (!m_legacyDevice)
     {
@@ -2067,6 +2157,8 @@ bool CustomerDisplay::mOpenLegacy(tVariant* retVal, tVariant* id)
         std::wstring settingsError;
         ParseSettings(m_legacyParams, m_legacyDevice->settings,
                       m_legacyDevice->columns, m_legacyDevice->rows, settingsError);
+        // БПО передала настройки окна (SetParameter/XML) — не только дефолты
+        m_legacyDevice->hasExplicitSettings = HasWindowSettings(m_legacyParams);
         // каталог медиафайлов — до запуска окна (нужен для WebView2-маппинга)
         wchar_t tempPath[MAX_PATH + 1] = { 0 };
         ::GetTempPathW(MAX_PATH, tempPath);
@@ -2087,6 +2179,15 @@ bool CustomerDisplay::mOpenLegacy(tVariant* retVal, tVariant* id)
 
     if (!dev->window->IsRunning())
     {
+        // одно окно на кассу: дисплей уже открыт другим экземпляром
+        // компоненты — настраиваем его своими параметрами, своё не создаём
+        if (TryUseForeignWindow(dev))
+        {
+            LogLine(L"WINDOW Open: чужое окно (второго не создаём)");
+            setBoolToTVariant(retVal, true);
+            setError(0, L"");
+            return true;
+        }
         if (!dev->window->Start(dev->settings, L"Дисплей покупателя", dev->mediaDir))
         {
             std::wstring err = dev->window->LastError();

@@ -106,11 +106,72 @@ static HWND FindOwnDisplayWindow()
     return ctx.hwnd;
 }
 
+// главное окно дисплея нашего процесса (точный заголовок — окно демо
+// «Дисплей покупателя — тест» не считается)
+static HWND FindOwnMainWindow()
+{
+    struct Ctx { DWORD pid; HWND hwnd; } ctx;
+    ctx.pid = ::GetCurrentProcessId();
+    ctx.hwnd = nullptr;
+    EnumWindows([](HWND h, LPARAM lp) -> BOOL {
+        auto* c = (Ctx*)lp;
+        wchar_t cls[64] = { 0 };
+        ::GetClassNameW(h, cls, 64);
+        wchar_t title[128] = { 0 };
+        if (wcscmp(cls, L"CustomerDisplayNativeWnd") == 0)
+        {
+            DWORD pid = 0;
+            ::GetWindowThreadProcessId(h, &pid);
+            if (pid == c->pid)
+            {
+                ::GetWindowTextW(h, title, 128);
+                if (wcscmp(title, L"Дисплей покупателя") == 0)
+                {
+                    c->hwnd = h;
+                    return FALSE;
+                }
+            }
+        }
+        return TRUE;
+    }, (LPARAM)&ctx);
+    return ctx.hwnd;
+}
+
+// есть ли живое окно дисплея другого процесса (например, 1С)?
+static bool ForeignDisplayWindowExists()
+{
+    struct Ctx { DWORD pid; bool found; } ctx;
+    ctx.pid = ::GetCurrentProcessId();
+    ctx.found = false;
+    EnumWindows([](HWND h, LPARAM lp) -> BOOL {
+        auto* c = (Ctx*)lp;
+        wchar_t cls[64] = { 0 };
+        ::GetClassNameW(h, cls, 64);
+        if (wcscmp(cls, L"CustomerDisplayNativeWnd") == 0)
+        {
+            wchar_t title[128] = { 0 };
+            ::GetWindowTextW(h, title, 128);
+            if (wcscmp(title, L"Дисплей покупателя") == 0)
+            {
+                DWORD pid = 0;
+                ::GetWindowThreadProcessId(h, &pid);
+                if (pid != c->pid) { c->found = true; return FALSE; }
+            }
+        }
+        return TRUE;
+    }, (LPARAM)&ctx);
+    return ctx.found;
+}
+
 int main(int argc, char** argv)
 {
     const char* dllPath = (argc > 1) ? argv[1] : "CustomerDisplayNative_64.dll";
 
     printf("Смоук-тест CustomerDisplayNative: %s\n\n", dllPath);
+
+    // на машине может быть открыто живое окно дисплея (1С) — разрешаем тесту
+    // своё окно; логику «одно окно на кассу» проверяем отдельно в конце
+    ::SetEnvironmentVariableW(L"CDN_ALLOW_SECOND_WINDOW", L"1");
 
     HMODULE dll = ::LoadLibraryA(dllPath);
     CHECK(dll != nullptr, "LoadLibrary");
@@ -289,6 +350,90 @@ int main(int argc, char** argv)
         ::Sleep(500);
         HWND wnd = FindOwnDisplayWindow();
         CHECK(wnd == nullptr || !::IsWindowVisible(wnd), "окно дисплея закрыто");
+    }
+
+    // --- Одно окно на кассу: второе устройство не создаёт окно, ---
+    // --- а переконфигурирует существующее в полосу ---
+    {
+        std::wstring dev1, dev2;
+
+        // первое устройство — обычное окно во весь экран (вторые окна ещё
+        // разрешены: на машине может быть живое окно дисплея 1С)
+        {
+            tVariant params[3]; memset(params, 0, sizeof(params));
+            SetInStr(&params[1], L"CustomerDisplay");
+            SetInStr(&params[2],
+                L"<Parameters>"
+                L"<Parameter Name=\"MonitorIndex\" Value=\"1\"/>"
+                L"<Parameter Name=\"Fullscreen\" Value=\"true\"/>"
+                L"</Parameters>");
+            bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"ConnectEquipment"), &ret, params, 3);
+            CHECK(ok && TV_BOOL(&ret), "ConnectEquipment (окно 1) -> true");
+            dev1 = OutStr(&params[0]);
+        }
+        ::Sleep(1200);
+        HWND wnd1 = FindOwnMainWindow();
+        CHECK(wnd1 != nullptr && ::IsWindowVisible(wnd1), "окно 1 создано и видимо");
+        RECT rc1 = { 0, 0, 0, 0 };
+        if (wnd1) ::GetWindowRect(wnd1, &rc1);
+
+        // включаем подавление и подключаем второе устройство — тот же
+        // монитор, полоса 30%: своего окна не создаёт, а переконфигурирует
+        // существующее (явные настройки передаются)
+        ::SetEnvironmentVariableW(L"CDN_ALLOW_SECOND_WINDOW", nullptr);
+        {
+            tVariant params[3]; memset(params, 0, sizeof(params));
+            SetInStr(&params[1], L"CustomerDisplay");
+            SetInStr(&params[2],
+                L"<Parameters>"
+                L"<Parameter Name=\"MonitorIndex\" Value=\"1\"/>"
+                L"<Parameter Name=\"Fullscreen\" Value=\"false\"/>"
+                L"<Parameter Name=\"BarHeightPct\" Value=\"30\"/>"
+                L"</Parameters>");
+            bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"ConnectEquipment"), &ret, params, 3);
+            CHECK(ok && TV_BOOL(&ret), "ConnectEquipment (второе устройство, полоса) -> true");
+            dev2 = OutStr(&params[0]);
+        }
+        ::Sleep(700);
+        HWND wnd2 = FindOwnMainWindow();
+        CHECK(wnd2 == wnd1, "второго окна не появилось (одно окно на кассу)");
+
+        // переконфигурацию в полосу проверяем только на чистой машине:
+        // при живом окне другого процесса настройки могло получить оно
+        if (wnd1 && wnd2 == wnd1 && !ForeignDisplayWindowExists())
+        {
+            RECT rc2; ::GetWindowRect(wnd2, &rc2);
+            CHECK(rc2.bottom - rc2.top < rc1.bottom - rc1.top,
+                  "существующее окно переконфигурировано в полосу");
+            printf("  окно: %ldx%ld -> %ldx%ld\n",
+                   rc1.right - rc1.left, rc1.bottom - rc1.top,
+                   rc2.right - rc2.left, rc2.bottom - rc2.top);
+        }
+        else
+        {
+            printf("  (переконфигурация не проверяется: есть чужое окно другого процесса)\n");
+        }
+
+        // вывод на подавленное устройство проходит без ошибки
+        {
+            tVariant params[2]; memset(params, 0, sizeof(params));
+            SetInStr(&params[0], dev2.c_str());
+            SetInStr(&params[1], L"<Strings><String>ТЕСТ | 1,00</String></Strings>");
+            bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"StringOutputOnCustomerDisplay"), &ret, params, 2);
+            CHECK(ok && TV_BOOL(&ret), "StringOutput на второе устройство -> true");
+        }
+
+        // прибираемся: оба устройства отключены, окно закрыто
+        {
+            tVariant d; memset(&d, 0, sizeof(d));
+            SetInStr(&d, dev2.c_str());
+            comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"DisconnectEquipment"), &ret, &d, 1);
+            SetInStr(&d, dev1.c_str());
+            comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"DisconnectEquipment"), &ret, &d, 1);
+            ::Sleep(500);
+            HWND wnd = FindOwnMainWindow();
+            CHECK(wnd == nullptr || !::IsWindowVisible(wnd), "окно дисплея закрыто");
+        }
     }
 
     // --- Вывод HTML должен быть отклонён ---

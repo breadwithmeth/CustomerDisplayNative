@@ -6,9 +6,8 @@
 'use strict'
 
 // Версия UI — в window, чтобы драйвер мог проверить по probe
-window.UI_VERSION = '1.1.3.0'
-
-const UI_VERSION = '1.1.3.1'
+const UI_VERSION = '1.1.3.2'
+window.UI_VERSION = UI_VERSION
 
 /* Kiosk-режим: страница открыта драйвером (WebView2) — панель разработчика
    скрыта, авто-демо выключено (чек появляется только от событий кассы) */

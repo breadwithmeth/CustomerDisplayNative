@@ -122,6 +122,8 @@ private:
         std::wstring mediaDir;
         cdp::DisplayContent lastContent;        // зеркало текущего экрана
         std::unique_ptr<cdp::DisplayWindow> window;
+        bool hasExplicitSettings = false; // БПО передал настройки окна (не только дефолты)
+        bool usesForeignWindow = false;   // обслуживается чужим окном (одно окно на кассу)
     };
     Device* FindDevice(const std::wstring& id);
     // Разрешение устройства для методов дисплея: точный ID -> legacy-устройство
@@ -130,6 +132,10 @@ private:
     // Гарантирует живое окно устройства: если пользователь закрыл окно из
     // панели задач — переоткрывает и восстанавливает последний экран
     bool EnsureDeviceWindow(Device* dev);
+    // Одно окно на кассу: если дисплей уже открыт другим экземпляром
+    // компоненты — своё окно не создаём, а настраиваем чужое. true —
+    // устройство обслуживается чужим окном.
+    bool TryUseForeignWindow(Device* dev);
     void DestroyDevice(const std::wstring& id);
     static bool ParseSettings(const std::map<std::wstring, std::wstring>& params,
                               cdp::DisplaySettings& settings, int& columns, int& rows,

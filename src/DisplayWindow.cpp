@@ -44,11 +44,34 @@ std::string WideToUtf8(const std::wstring& w)
 }
 
 const wchar_t* kWindowClass = L"CustomerDisplayNativeWnd";
+const wchar_t* kWindowTitle = L"Дисплей покупателя"; // заголовок рабочего окна
 
 constexpr UINT WM_APP_SETTINGS = WM_APP + 1;
 constexpr UINT WM_APP_CONTENT  = WM_APP + 2;
 constexpr UINT WM_APP_POS      = WM_APP + 3; // очередь JS-событий интерфейса
 constexpr UINT TIMER_PAID_CLEAR = 2;          // очистка чека после «ВНЕСЕНО»
+
+// Пакет настроек для чужого окна (WM_COPYDATA, работает между процессами):
+// второй экземпляр компоненты настраивает уже открытое окно вместо своего
+constexpr UINT32 kSettingsMagic = 0x43444E53; // 'CDNS'
+UINT SettingsMessageId()
+{
+    static UINT id = ::RegisterWindowMessageW(L"CustomerDisplayNative.ReconfigureSettings");
+    return id;
+}
+struct SettingsCopyData
+{
+    UINT32 magic;
+    UINT32 size;
+    int    monitorIndex;
+    int    fullscreen;     // 0/1
+    int    barHeightPct;
+    int    fontScalePct;
+    UINT32 bgColor;
+    UINT32 textColor;
+    UINT32 accentColor;
+    int    soundEnabled;   // 0/1
+};
 
 // Высоты шрифтов относительно высоты клиента (до масштаба)
 struct LayoutMetrics
@@ -974,6 +997,17 @@ void ComputeWindowPlacement(const DisplaySettings& settings, const RECT& rcMon,
 
 // ------------------------------------------------------------------ окно
 
+// Переразмещение окна по текущим настройкам (без topmost, с показом)
+void RepositionDisplayWindow(HWND hwnd, Impl* impl)
+{
+    RECT rcMon = MonitorRectByIndex(impl->settings.monitorIndex);
+    int x, y, w, h;
+    ComputeWindowPlacement(impl->settings, rcMon, x, y, w, h);
+    ::SetWindowPos(hwnd, HWND_NOTOPMOST, x, y, w, h,
+                   SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    ::InvalidateRect(hwnd, nullptr, FALSE);
+}
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     Impl* impl = (Impl*)::GetWindowLongPtrW(hwnd, GWLP_USERDATA);
@@ -992,14 +1026,58 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_APP_SETTINGS:
         {
             // перепозиционирование (монитор мог измениться); без topmost
-            RECT rcMon = MonitorRectByIndex(impl->settings.monitorIndex);
-            int x, y, w, h;
-            ComputeWindowPlacement(impl->settings, rcMon, x, y, w, h);
-            ::SetWindowPos(hwnd, HWND_NOTOPMOST, x, y, w, h,
-                           SWP_NOACTIVATE | SWP_SHOWWINDOW);
-            ::InvalidateRect(hwnd, nullptr, FALSE);
+            RepositionDisplayWindow(hwnd, impl);
         }
         return 0;
+
+    case WM_COPYDATA:
+        {
+            // настройки от другого экземпляра компоненты: одно окно на кассу,
+            // второй экземпляр переконфигурирует чужое окно вместо своего
+            if (!impl)
+                return ::DefWindowProcW(hwnd, msg, wParam, lParam);
+            const COPYDATASTRUCT* cds = (const COPYDATASTRUCT*)lParam;
+            if (cds && cds->dwData == (ULONG_PTR)SettingsMessageId() &&
+                cds->cbData == sizeof(SettingsCopyData) && cds->lpData)
+            {
+                const SettingsCopyData* s = (const SettingsCopyData*)cds->lpData;
+                if (s->magic == kSettingsMagic && s->size == sizeof(SettingsCopyData))
+                {
+                    DisplaySettings st;
+                    st.monitorIndex = s->monitorIndex;
+                    st.fullscreen   = s->fullscreen != 0;
+                    st.barHeightPct = s->barHeightPct;
+                    st.fontScalePct = s->fontScalePct;
+                    st.bgColor      = (COLORREF)s->bgColor;
+                    st.textColor    = (COLORREF)s->textColor;
+                    st.accentColor  = (COLORREF)s->accentColor;
+                    st.soundEnabled = s->soundEnabled != 0;
+                    // применяем и перепозиционируем только при изменении —
+                    // посылающий экземпляр шлёт настройки с каждым событием
+                    bool changed;
+                    ::EnterCriticalSection(&impl->lock);
+                    changed = impl->settings.monitorIndex != st.monitorIndex ||
+                              impl->settings.fullscreen   != st.fullscreen   ||
+                              impl->settings.barHeightPct != st.barHeightPct ||
+                              impl->settings.fontScalePct != st.fontScalePct ||
+                              impl->settings.bgColor      != st.bgColor      ||
+                              impl->settings.textColor    != st.textColor    ||
+                              impl->settings.accentColor  != st.accentColor  ||
+                              impl->settings.soundEnabled != st.soundEnabled;
+                    if (changed)
+                        impl->settings = st;
+                    ::LeaveCriticalSection(&impl->lock);
+                    if (changed)
+                    {
+                        WvLog(L"reconfigured by foreign instance (WM_COPYDATA)");
+                        RepositionDisplayWindow(hwnd, impl);
+                    }
+                    return TRUE;
+                }
+            }
+        }
+        // не наш пакет — стандартная обработка
+        return ::DefWindowProcW(hwnd, msg, wParam, lParam);
 
     case WM_APP_CONTENT:
         {
@@ -1131,6 +1209,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     default:
         return ::DefWindowProcW(hwnd, msg, wParam, lParam);
     }
+
+    // сюда попадают break-ветки (WM_PAINT/WM_SIZE при активном WebView2):
+    // выход из switch без return у WndProc — неопределённое поведение
+    return 0;
 }
 
 std::once_flag g_classOnce;
@@ -1247,8 +1329,22 @@ bool DisplayWindow::Start(const DisplaySettings& settings, const std::wstring& d
     Impl* impl = m_impl;
     ::EnterCriticalSection(&impl->lock);
     if (impl->thread) {
+        if (impl->hwnd) {
+            ::LeaveCriticalSection(&impl->lock);
+            return true; // уже запущено
+        }
+        // поток завершился (окно закрыли вручную из панели задач), но хендл
+        // остался — прибираем мёртвый поток и запускаем окно заново,
+        // иначе дисплей больше никогда не переоткроется
+        HANDLE dead = impl->thread;
+        impl->thread = nullptr;
         ::LeaveCriticalSection(&impl->lock);
-        return true; // уже запущено
+        if (::WaitForSingleObject(dead, 2000) != WAIT_OBJECT_0)
+            ::TerminateThread(dead, 1);
+        ::CloseHandle(dead);
+        if (impl->started) { ::CloseHandle(impl->started); impl->started = nullptr; }
+        WvLog(L"Start: предыдущий поток окна умер — перезапуск");
+        ::EnterCriticalSection(&impl->lock);
     }
     impl->settings = settings;
     impl->title = deviceTitle.empty() ? L"Дисплей покупателя" : deviceTitle;
@@ -1437,6 +1533,60 @@ std::wstring DisplayWindow::DescribeState() const
                (long)rc.left, (long)rc.top, (long)rc.right, (long)rc.bottom,
                impl->settings.monitorIndex);
     return buf;
+}
+
+// ------------------------------------------------------- единое окно на кассу
+
+HWND FindForeignDisplayWindow()
+{
+    // точный заголовок: тестовое окно демо («… — тест») не считаем
+    return ::FindWindowW(kWindowClass, kWindowTitle);
+}
+
+bool WindowOnTargetMonitor(HWND hwnd, const DisplaySettings& settings)
+{
+    if (!hwnd || !::IsWindow(hwnd))
+        return false;
+    HMONITOR mon = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFOEXW mi = {};
+    mi.cbSize = sizeof(mi);
+    if (!::GetMonitorInfoW(mon, &mi))
+        return true; // не определили — предполагаем тот же монитор
+    // цель сравниваем прямоугольниками (MonitorRectByIndex клампит индекс
+    // к последнему монитору — на одномониторных конфигурациях любой
+    // MonitorIndex даёт один и тот же экран)
+    RECT target = MonitorRectByIndex(settings.monitorIndex);
+    return mi.rcMonitor.left == target.left && mi.rcMonitor.top == target.top &&
+           mi.rcMonitor.right == target.right && mi.rcMonitor.bottom == target.bottom;
+}
+
+bool SendSettingsToDisplayWindow(HWND hwnd, const DisplaySettings& settings)
+{
+    if (!hwnd || !::IsWindow(hwnd))
+        return false;
+    SettingsCopyData data = {};
+    data.magic = kSettingsMagic;
+    data.size = sizeof(SettingsCopyData);
+    data.monitorIndex = settings.monitorIndex;
+    data.fullscreen = settings.fullscreen ? 1 : 0;
+    data.barHeightPct = settings.barHeightPct;
+    data.fontScalePct = settings.fontScalePct;
+    data.bgColor = (UINT32)settings.bgColor;
+    data.textColor = (UINT32)settings.textColor;
+    data.accentColor = (UINT32)settings.accentColor;
+    data.soundEnabled = settings.soundEnabled ? 1 : 0;
+
+    COPYDATASTRUCT cds = {};
+    cds.dwData = (ULONG_PTR)SettingsMessageId();
+    cds.cbData = sizeof(data);
+    cds.lpData = &data;
+    // окно может принадлежать другому процессу (и даже «зависнуть») —
+    // передаём с таймаутом, чтобы не подвесить кассу
+    DWORD_PTR result = 0;
+    return ::SendMessageTimeoutW(hwnd, WM_COPYDATA,
+                                 (WPARAM)::GetCurrentProcessId(), (LPARAM)&cds,
+                                 SMTO_BLOCK | SMTO_ABORTIFHUNG | SMTO_NOTIMEOUTIFNOTHUNG,
+                                 1500, &result) != 0 && result != 0;
 }
 
 } // namespace cdp
