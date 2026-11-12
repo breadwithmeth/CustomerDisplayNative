@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <mutex>
+#include <thread>
 #include <wrl/client.h>
 #include <wrl/event.h>
 #include <wrl/implements.h>
@@ -1203,6 +1204,23 @@ unsigned __stdcall DisplayThreadProc(void* p)
 
     impl->hwnd = nullptr;
     impl->FreeBuffers();
+
+    // удаляем профиль устройства (кэш WebView2 не переносится между запусками)
+    if (!impl->userDataDir.empty())
+    {
+        std::wstring rm = impl->userDataDir;
+        std::thread([rm]() {
+            // best-effort: файлы могут быть заняты недозакрытыми процессами
+            for (int attempt = 0; attempt < 3; ++attempt)
+            {
+                std::wstring cmd = L"cmd /c rd /s /q \"" + rm + L"\"";
+                _wsystem(cmd.c_str());
+                DWORD attr = ::GetFileAttributesW(rm.c_str());
+                if (attr == INVALID_FILE_ATTRIBUTES) return;
+                ::Sleep(1000);
+            }
+        }).detach();
+    }
     if (gdiToken) Gdiplus::GdiplusShutdown(gdiToken);
     ::CoUninitialize();
     return 0;
@@ -1236,11 +1254,18 @@ bool DisplayWindow::Start(const DisplaySettings& settings, const std::wstring& d
     impl->title = deviceTitle.empty() ? L"Дисплей покупателя" : deviceTitle;
     impl->mediaDir = mediaDir;
     impl->uiFolder = GetDllDirectory() + L"\\ui";
+    // уникальный профиль на каждый запуск: HTTP-кэш WebView2 не переносится
+    // между запусками — страница всегда грузится свежей
+    wchar_t guidStr[64] = { 0 };
+    GUID g;
+    if (SUCCEEDED(::CoCreateGuid(&g)))
+        ::StringFromGUID2(g, guidStr, 64);
+    else
+        ::swprintf(guidStr, 64, L"%08X", ::GetTickCount());
     wchar_t tempPath[MAX_PATH + 1] = { 0 };
     ::GetTempPathW(MAX_PATH, tempPath);
-    static std::atomic<int> wvSeq(0);
-    impl->userDataDir = std::wstring(tempPath) + L"CustomerDisplayNative\\webview\\w" +
-                        std::to_wstring(++wvSeq);
+    impl->userDataDir = std::wstring(tempPath) + L"CustomerDisplayNative\\webview\\" +
+                        std::wstring(guidStr);
     impl->wvReady = false;
     impl->gdiFallback = false;
     impl->controllerRetried = false;
