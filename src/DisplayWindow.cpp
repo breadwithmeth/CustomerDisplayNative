@@ -16,6 +16,7 @@ using namespace Microsoft::WRL;
 
 // экземпляр DLL — для определения папки ui/ (см. dllmain.cpp)
 extern HMODULE g_hDllInstance;
+extern const wchar_t* g_extensionVersion;
 
 namespace cdp {
 
@@ -787,33 +788,35 @@ HRESULT AttachWebview(Impl* impl, ICoreWebView2Controller* ctrl)
                             {
                                 WvLog(L"ICoreWebView2_3 not available");
                             }
-    RECT rc;
-    ::GetClientRect(impl->hwnd, &rc);
-    impl->wvController->put_Bounds(rc);
-    // события, накопленные до загрузки страницы, уходят после неё
-    impl->wv->add_NavigationCompleted(
-        Callback<ICoreWebView2NavigationCompletedEventHandler>(
-            [impl](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
-                impl->wvReady = true;
-                // диагностика: есть ли мост на странице
-                impl->wv->ExecuteScript(
-                    L"String(!!window.__pos)+'/'+String(!!(window.chrome&&window.chrome.webview))",
-                    Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
-                        [impl](HRESULT hr, LPCWSTR res) -> HRESULT {
-                            wchar_t b[128];
-                            ::swprintf(b, 128, L"probe __pos/chrome.webview = %s (hr=0x%08X)",
-                                       res ? res : L"?", (unsigned)hr);
-                            WvLog(b);
+                            RECT rc;
+                            ::GetClientRect(impl->hwnd, &rc);
+                            impl->wvController->put_Bounds(rc);
+                            // события, накопленные до загрузки страницы, уходят после неё
+                            impl->wv->add_NavigationCompleted(
+                                Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                                    [impl](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
+                                        impl->wvReady = true;
+                                        // диагностика: есть ли мост на странице
+                                        impl->wv->ExecuteScript(
+                                            L"String(!!window.__pos)+'/'+String(!!(window.chrome&&window.chrome.webview))",
+                                            Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+                                                [impl](HRESULT hr, LPCWSTR res) -> HRESULT {
+                                                    wchar_t b[128];
+                                                    ::swprintf(b, 128, L"probe __pos/chrome.webview = %s (hr=0x%08X)",
+                                                               res ? res : L"?", (unsigned)hr);
+                                                    WvLog(b);
+                                                    return S_OK;
+                                                }).Get());
+                                        WvLog(L"navigation completed — интерфейс покупателя активен");
+                                        FlushPendingJs(impl);
+                                        return S_OK;
+                                    }).Get(),
+                                &impl->navToken);
+                            // версия в URL — чтобы кэш WebView2 не отдавал старый app.js
+                            impl->wv->Navigate((std::wstring(L"https://app.customer/index.html?v=") +
+                                                g_extensionVersion + L"&kiosk=1").c_str());
+                            WvLog(L"navigate -> app.customer/index.html (cache-bust)");
                             return S_OK;
-                        }).Get());
-                WvLog(L"navigation completed — интерфейс покупателя активен");
-                FlushPendingJs(impl);
-                return S_OK;
-            }).Get(),
-        &impl->navToken);
-    impl->wv->Navigate(L"https://app.customer/index.html?kiosk=1");
-    WvLog(L"navigate -> app.customer/index.html?kiosk=1");
-    return S_OK;
 }
 
 void StartWebView2(Impl* impl)
@@ -1092,8 +1095,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             for (const auto& json : batch)
             {
                 HRESULT hr = impl->wv->PostWebMessageAsJson(json.c_str());
+                // резервный путь: JSON-канал отказал — дублируем через ExecuteScript
+                if (FAILED(hr))
+                {
+                    std::wstring js = L"window.__pos&&window.__pos.dispatch(" + json + L");";
+                    impl->wv->ExecuteScript(js.c_str(), nullptr);
+                    hr = impl->wv->PostWebMessageAsJson(json.c_str());
+                }
                 wchar_t b[128];
-                ::swprintf(b, 128, L"dispatch hr=0x%08X json=%.80s", (unsigned)hr, json.c_str());
+                ::swprintf(b, 128, L"dispatch hr=0x%08X json=%.120s", (unsigned)hr, json.c_str());
                 WvLog(b);
                 // «ВНЕСЕНО» — наличная оплата: через 5 с очищаем чек.
                 // Таймер Win32 (не JS) — работает даже при троттлинге WebView2
