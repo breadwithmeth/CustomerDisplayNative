@@ -9,7 +9,65 @@
 // поэтому прагма setlocale не нужна (и вредна: ломает кириллицу в литералах)
 
 // ---------------------------------------------------------------------------
+// Журнал вызовов (используется и в экспортируемых функциях, и в компоненте)
+
+CRITICAL_SECTION g_logLock;
+bool g_logLockInit = false;
+
+void LogLine(const std::wstring& line)
+{
+    if (!g_logLockInit)
+    {
+        ::InitializeCriticalSectionAndSpinCount(&g_logLock, 0x400);
+        g_logLockInit = true;
+    }
+    ::EnterCriticalSection(&g_logLock);
+    wchar_t tempPath[MAX_PATH + 1] = { 0 };
+    ::GetTempPathW(MAX_PATH, tempPath);
+    std::wstring dir = std::wstring(tempPath) + L"CustomerDisplayNative";
+    const std::wstring path = dir + L"\\driver.log";
+    // ротация: не держим больше ~10 МБ
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (::GetFileAttributesExW(path.c_str(), ::GetFileExInfoStandard, &fa))
+    {
+        const ULONGLONG size = ((ULONGLONG)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+        if (size > 10ULL * 1024 * 1024)
+            ::MoveFileExW(path.c_str(), (path + L".1").c_str(), MOVEFILE_REPLACE_EXISTING);
+    }
+    HANDLE h = ::CreateFileW(path.c_str(), FILE_APPEND_DATA,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                             OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+    {
+        // каталог мог быть удалён/не создан — пересоздаём и пробуем снова
+        ::CreateDirectoryW(dir.c_str(), nullptr);
+        h = ::CreateFileW(path.c_str(), FILE_APPEND_DATA,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                          OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    }
+    if (h != INVALID_HANDLE_VALUE)
+    {
+        SYSTEMTIME st;
+        ::GetLocalTime(&st);
+        wchar_t ts[48];
+        ::swprintf(ts, 48, L"[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute,
+                   st.wSecond, st.wMilliseconds);
+        std::wstring full = std::wstring(ts) + line + L"\r\n";
+        DWORD written = 0;
+        ::WriteFile(h, full.c_str(), (DWORD)(full.size() * sizeof(wchar_t)), &written, nullptr);
+        ::CloseHandle(h);
+    }
+    ::LeaveCriticalSection(&g_logLock);
+}
+
+// ---------------------------------------------------------------------------
 // Регистрация компоненты
+
+std::wstring WcharPtrToWstring(const WCHAR_T* s)
+{
+    return s ? std::wstring((const wchar_t*)s) : std::wstring(L"<null>");
+}
+
 static const wchar_t g_kClassNames[] = L"CustomerDisplay";
 static const wchar_t* g_extensionName = L"CustomerDisplayNative";
 static const wchar_t* g_extensionVersion = L"1.1.1.1";
@@ -108,6 +166,7 @@ static const long g_interfaceRevision = 4008;
 // Экспортируемые функции
 long GetClassObject(const WCHAR_T* wsName, IComponentBase** pInterface)
 {
+    LogLine(L"GetClassObject: " + WcharPtrToWstring(wsName));
     if (!pInterface)
         return 0;
     if (!*pInterface)
@@ -120,12 +179,14 @@ long GetClassObject(const WCHAR_T* wsName, IComponentBase** pInterface)
 //---------------------------------------------------------------------------//
 AppCapabilities SetPlatformCapabilities(const AppCapabilities capabilities)
 {
+    LogLine(L"SetPlatformCapabilities: " + std::to_wstring((int)capabilities));
     g_capabilities = capabilities;
     return eAppCapabilitiesLast;
 }
 //---------------------------------------------------------------------------//
 long DestroyObject(IComponentBase** pIntf)
 {
+    LogLine(L"DestroyObject");
     if (!*pIntf)
         return -1;
     delete *pIntf;
@@ -135,6 +196,7 @@ long DestroyObject(IComponentBase** pIntf)
 //---------------------------------------------------------------------------//
 const WCHAR_T* GetClassNames()
 {
+    LogLine(L"GetClassNames -> " + std::wstring(g_kClassNames));
     // На Windows WCHAR_T совпадает с wchar_t (4 байта — только в сборках под Linux)
     return (const WCHAR_T*)g_kClassNames;
 }
@@ -321,45 +383,7 @@ std::vector<std::wstring> DemoLines()
 // ------------------------------- журнал вызовов ---------------------------
 // Каждое обращение платформы к методам компоненты пишется в
 // %TEMP%\CustomerDisplayNative\driver.log — для диагностики цепочки БПО.
-CRITICAL_SECTION g_logLock;
-bool g_logLockInit = false;
 
-void LogLine(const std::wstring& line)
-{
-    if (!g_logLockInit)
-    {
-        ::InitializeCriticalSectionAndSpinCount(&g_logLock, 0x400);
-        g_logLockInit = true;
-    }
-    ::EnterCriticalSection(&g_logLock);
-    wchar_t tempPath[MAX_PATH + 1] = { 0 };
-    ::GetTempPathW(MAX_PATH, tempPath);
-    std::wstring dir = std::wstring(tempPath) + L"CustomerDisplayNative";
-    HANDLE h = ::CreateFileW((dir + L"\\driver.log").c_str(), FILE_APPEND_DATA,
-                             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                             OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
-    {
-        // каталог мог быть удалён/не создан — пересоздаём и пробуем снова
-        EnsureDirectory(dir);
-        h = ::CreateFileW((dir + L"\\driver.log").c_str(), FILE_APPEND_DATA,
-                          FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                          OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    }
-    if (h != INVALID_HANDLE_VALUE)
-    {
-        SYSTEMTIME st;
-        ::GetLocalTime(&st);
-        wchar_t ts[48];
-        ::swprintf(ts, 48, L"[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute,
-                   st.wSecond, st.wMilliseconds);
-        std::wstring full = std::wstring(ts) + line + L"\r\n";
-        DWORD written = 0;
-        ::WriteFile(h, full.c_str(), (DWORD)(full.size() * sizeof(wchar_t)), &written, nullptr);
-        ::CloseHandle(h);
-    }
-    ::LeaveCriticalSection(&g_logLock);
-}
 
 std::wstring ParamToLogString(tVariant* p)
 {
@@ -372,9 +396,9 @@ std::wstring ParamToLogString(tVariant* p)
             if (!TV_WSTR(p))
                 return L"str:<null>";
             size_t len = p->wstrLen;
-            std::wstring s((wchar_t*)TV_WSTR(p), std::min<size_t>(len, (size_t)300));
-            if (len > 300)
-                s += L"...";
+            std::wstring s((wchar_t*)TV_WSTR(p), std::min<size_t>(len, (size_t)1500));
+            if (len > 1500)
+                s += L"...(обрезано, всего " + std::to_wstring(len) + L")";
             for (auto& c : s)
                 if (c == L'\r' || c == L'\n') c = L' ';
             return L"str:" + s;
@@ -386,6 +410,12 @@ std::wstring ParamToLogString(tVariant* p)
     default:          return L"vt=" + std::to_wstring((int)TV_VT(p));
     }
 }
+
+std::wstring RetValToLogString(tVariant* v)
+{
+    return ParamToLogString(v);
+}
+
 
 // ------------------- события интерфейса покупателя (WebView2) -------------------
 
@@ -595,6 +625,7 @@ long CustomerDisplay::GetInfo()
 //---------------------------------------------------------------------------//
 void CustomerDisplay::Done()
 {
+    LogLine(L"DONE: уничтожение компоненты");
     // Останавливаем все окна устройств (новый и старый интерфейс)
     ::EnterCriticalSection(&m_devicesLock);
     std::vector<std::unique_ptr<Device>> devices;
@@ -611,6 +642,7 @@ bool CustomerDisplay::RegisterExtensionAs(WCHAR_T** wsExtensionName)
 {
     const wchar_t* wsExtension = g_extensionName;
     size_t iActualSize = ::wcslen(wsExtension) + 1;
+    LogLine(L"RegisterExtensionAs: " + std::wstring(wsExtension));
     if (m_iMemory)
     {
         if (m_iMemory->AllocMemory((void**)wsExtensionName, (unsigned long)(iActualSize * sizeof(WCHAR_T))))
@@ -633,6 +665,8 @@ long CustomerDisplay::FindProp(const WCHAR_T* wsPropName)
     plPropNum = findName(g_PropNames, propName, epLast);
     if (plPropNum == -1)
         plPropNum = findName(g_PropNamesRu, propName, epLast);
+    if (plPropNum == -1)
+        LogLine(L"FindProp: НЕ НАЙДЕН → " + std::wstring(propName));
     delete[] propName;
     return plPropNum;
 }
@@ -717,6 +751,8 @@ long CustomerDisplay::FindMethod(const WCHAR_T* wsMethodName)
             if (!::wcscmp(a.name, name)) { plMethodNum = a.methodIndex; break; }
         }
     }
+    if (plMethodNum == -1)
+        LogLine(L"FindMethod: НЕ НАЙДЕН → " + std::wstring(name));
     delete[] name;
     return plMethodNum;
 }
@@ -830,6 +866,10 @@ bool CustomerDisplay::HasRetVal(const long lMethodNum)
 //---------------------------------------------------------------------------//
 bool CustomerDisplay::CallAsProc(const long lMethodNum, tVariant* paParams, const long lSizeArray)
 {
+    // 1С попыталась вызвать метод как процедуру — фиксируем
+    std::wstring mName = (lMethodNum >= 0 && lMethodNum < emLast)
+                         ? g_MethodNames[lMethodNum] : L"<unknown>";
+    LogLine(L"CallAsProc (процедурный вызов!): " + mName);
     return false; // все методы — функции
 }
 //---------------------------------------------------------------------------//
@@ -848,6 +888,7 @@ bool CustomerDisplay::CallAsFunc(const long lMethodNum, tVariant* pvarRetValue,
 
     bool result = CallAsFuncImpl(lMethodNum, pvarRetValue, paParams, lSizeArray);
     LogLine(L"RET  " + mName + L" -> " + (result ? L"true" : L"false") +
+            L" retVal=" + RetValToLogString(pvarRetValue) +
             L" err(" + std::to_wstring(m_lastErrorCode) + L")=" + m_lastError);
     return result;
 }
@@ -923,6 +964,8 @@ bool CustomerDisplay::CallAsFuncImpl(const long lMethodNum, tVariant* pvarRetVal
 //---------------------------------------------------------------------------//
 void CustomerDisplay::SetLocale(const WCHAR_T* loc)
 {
+    if (loc)
+        LogLine(L"SetLocale: " + WcharPtrToWstring(loc));
     _wsetlocale(LC_ALL, loc);
 }
 /////////////////////////////////////////////////////////////////////////////
@@ -1045,6 +1088,8 @@ bool CustomerDisplay::getBoolParam(tVariant* paParams, long index, bool fallback
 //---------------------------------------------------------------------------//
 void CustomerDisplay::setError(long code, const std::wstring& text)
 {
+    if (code != 0)
+        LogLine(L"ERROR " + std::to_wstring(code) + L": " + text);
     m_lastErrorCode = code;
     m_lastError = text;
 }
