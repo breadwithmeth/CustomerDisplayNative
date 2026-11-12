@@ -61,6 +61,7 @@ const state = {
   totalText: '',       // итог строкой (из драйвера), приоритетнее total
   discountText: '',    // скидка строкой (из драйвера)
   lastTouchedId: null, // позиция для «N×цена = сумма»
+  awaitingPaidClear: false, // ждём чистку чека после «ВНЕСЕНО»
   method: null,        // 'card' | 'cash'
   opText: '',          // текст строки оплаты из РМК
   success: null,       // { total, positions }
@@ -111,6 +112,10 @@ function applyEvent(event) {
       break
     }
     case 'check/clear': {
+      // отложенная чистка после «ВНЕСЕНО»: если уже начал пробиваться новый
+      // чек (прошёл check/item) — не затираем его
+      if (event.reason === 'paid' && !state.awaitingPaidClear) return
+      state.awaitingPaidClear = false
       // сброс всегда: «ОТМЕНА ОПЛАТЫ»/«КАССА НЕ РАБОТАЕТ» из БПО должны
       // очищать дисплей даже посреди оплаты
       state.lines = []
@@ -148,6 +153,9 @@ function applyEvent(event) {
     }
     // ---- события из драйвера (WebView2-интеграция) ----
     case 'check/item': {
+      if (state.screen === 'SUCCESS') return
+      // новый чек начался — отменяем отложенную чистку после «ВНЕСЕНО»
+      state.awaitingPaidClear = false
       const p = splitItemLine(event.name || '')
 
       // оплата наличными: «ВНЕСЕНО: X СДАЧА: Y» — экран оплаты;
@@ -155,12 +163,13 @@ function applyEvent(event) {
       if (p.paid !== undefined) {
         state.paidText = 'ВНЕСЕНО: ' + p.paid
         state.changeText = p.change ? 'СДАЧА: ' + p.change : ''
+        state.awaitingPaidClear = true
         state.screen = 'PAYMENT'
         render()
         return
       }
 
-      if (state.screen === 'PAYMENT' || state.screen === 'SUCCESS') return
+      if (state.screen === 'SUCCESS') return
 
       // скидка
       if (p.discount !== undefined) {
@@ -231,11 +240,12 @@ function applyEvent(event) {
     }
     case 'message/show': {
       state.message = event.text || ''
+      state.awaitingPaidClear = false
       state.screen = 'MESSAGE'
       setTimeout(() => {
         if (state.screen === 'MESSAGE' && state.message === event.text) {
           state.message = null
-          state.screen = 'WAITING'
+          state.screen = state.lines.length > 0 ? 'SHOPPING' : 'WAITING'
           render()
         }
       }, 4500)
@@ -246,6 +256,7 @@ function applyEvent(event) {
       state.opText = ''
       state.paidText = event.paid || ''
       state.changeText = event.change || ''
+      state.awaitingPaidClear = true
       state.method = null
       state.screen = 'PAYMENT'
       break
