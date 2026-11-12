@@ -6,7 +6,7 @@
 'use strict'
 
 // Версия UI — в window, чтобы драйвер мог проверить по probe
-const UI_VERSION = '1.1.3.2'
+const UI_VERSION = '1.1.3.3'
 window.UI_VERSION = UI_VERSION
 
 /* Kiosk-режим: страница открыта драйвером (WebView2) — панель разработчика
@@ -65,6 +65,7 @@ const state = {
   totalText: '',       // итог строкой (из драйвера), приоритетнее total
   discountText: '',    // скидка строкой (из драйвера)
   lastTouchedId: null, // позиция для «N×цена = сумма»
+  awaitingPrice: false, // ждём цену отдельной строкой («имя\rцена» из БПО)
   awaitingPaidClear: false, // ждём чистку чека после «ВНЕСЕНО»
   method: null,        // 'card' | 'cash'
   opText: '',          // текст строки оплаты из РМК
@@ -127,6 +128,7 @@ function applyEvent(event) {
       state.totalText = ''
       state.discountText = ''
       state.lastTouchedId = null
+      state.awaitingPrice = false
       state.screen = 'WAITING'
       break
     }
@@ -195,6 +197,7 @@ function applyEvent(event) {
           // отмена позиции — убираем её из чека
           state.lines = state.lines.filter((l) => l !== target)
           if (state.lastTouchedId === target.id) state.lastTouchedId = null
+          state.awaitingPrice = false
           if (state.lines.length === 0) state.screen = 'WAITING'
           else if (state.lines.length > 0) state.screen = 'SHOPPING'
           return
@@ -203,12 +206,24 @@ function applyEvent(event) {
         target.qtyText = p.qtyUpdate.qty + '×' + p.qtyUpdate.price
         target.sumText = p.qtyUpdate.total
         state.lastTouchedId = target.id
+        state.awaitingPrice = false
         state.screen = 'SHOPPING'
         return
       }
 
-      // только сумма без наименования — шум пересчёта
-      if (p.sumOnly) return
+      // БПО шлёт позицию ВФД-строкой «имя\rцена»: наименование и сумма
+      // приходят двумя событиями. Сразу после наименования цепляем сумму
+      // к последней позиции; голые суммы без пары — по-прежнему шум
+      // пересчёта, их игнорируем
+      if (p.sumOnly) {
+        if (state.awaitingPrice) {
+          const target = state.lines.find((l) => l.id === state.lastTouchedId) ||
+                         state.lines[state.lines.length - 1]
+          if (target) target.sumText = p.sumOnly
+          state.awaitingPrice = false
+        }
+        return
+      }
 
       const name = p.name
       if (!name) return
@@ -220,7 +235,12 @@ function applyEvent(event) {
         if (p.sum && !/^0[.,]00/.test(p.sum)) {
           existing.sumText = p.sum
           state.lastTouchedId = existing.id
+          state.awaitingPrice = false
           state.screen = 'SHOPPING'
+        } else if (!p.sum) {
+          // наименование без суммы — цена придёт отдельной строкой
+          state.lastTouchedId = existing.id
+          state.awaitingPrice = true
         }
         return
       }
@@ -232,6 +252,7 @@ function applyEvent(event) {
         sumText: p.sum,
       })
       state.lastTouchedId = state.lines[state.lines.length - 1].id
+      state.awaitingPrice = !p.sum
       state.screen = 'SHOPPING'
       break
     }
@@ -239,6 +260,7 @@ function applyEvent(event) {
       if (state.screen === 'SUCCESS') return
       // при экране оплаты (внесено) остаёмся на PAYMENT, обновляя сумму
       state.totalText = event.text || ''
+      state.awaitingPrice = false // итог: пара «имя-цена» закрыта
       if (state.screen !== 'PAYMENT') state.screen = 'SHOPPING'
       break
     }
