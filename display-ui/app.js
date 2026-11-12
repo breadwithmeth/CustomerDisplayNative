@@ -5,6 +5,8 @@
 
 'use strict'
 
+const UI_VERSION = '1.1.2.2'
+
 /* Kiosk-режим: страница открыта драйвером (WebView2) — панель разработчика
    скрыта, авто-демо выключено (чек появляется только от событий кассы) */
 const KIOSK = new URLSearchParams(location.search).has('kiosk')

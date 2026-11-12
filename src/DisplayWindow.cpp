@@ -795,18 +795,18 @@ HRESULT AttachWebview(Impl* impl, ICoreWebView2Controller* ctrl)
                             impl->wv->add_NavigationCompleted(
                                 Callback<ICoreWebView2NavigationCompletedEventHandler>(
                                     [impl](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
-                                        impl->wvReady = true;
-                                        // диагностика: есть ли мост на странице
-                                        impl->wv->ExecuteScript(
-                                            L"String(!!window.__pos)+'/'+String(!!(window.chrome&&window.chrome.webview))",
-                                            Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
-                                                [impl](HRESULT hr, LPCWSTR res) -> HRESULT {
-                                                    wchar_t b[128];
-                                                    ::swprintf(b, 128, L"probe __pos/chrome.webview = %s (hr=0x%08X)",
-                                                               res ? res : L"?", (unsigned)hr);
-                                                    WvLog(b);
-                                                    return S_OK;
-                                                }).Get());
+                impl->wvReady = true;
+                // диагностика: есть ли мост на странице + версия UI
+                impl->wv->ExecuteScript(
+                    L"String(!!window.__pos)+'/'+String(!!(window.chrome&&window.chrome.webview))+' UI='+(window.UI_VERSION||'UNKNOWN')",
+                    Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+                        [impl](HRESULT hr, LPCWSTR res) -> HRESULT {
+                            wchar_t b[128];
+                            ::swprintf(b, 128, L"probe __pos/chrome.webview = %s (hr=0x%08X)",
+                                       res ? res : L"?", (unsigned)hr);
+                            WvLog(b);
+                            return S_OK;
+                        }).Get());
                                         WvLog(L"navigation completed — интерфейс покупателя активен");
                                         FlushPendingJs(impl);
                                         return S_OK;

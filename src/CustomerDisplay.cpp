@@ -70,7 +70,7 @@ std::wstring WcharPtrToWstring(const WCHAR_T* s)
 
 static const wchar_t g_kClassNames[] = L"CustomerDisplay";
 static const wchar_t* g_extensionName = L"CustomerDisplayNative";
-const wchar_t* g_extensionVersion = L"1.1.2.1";
+const wchar_t* g_extensionVersion = L"1.1.2.2";
 static const wchar_t* g_driverName = L"Дисплей покупателя (монитор)";
 static const wchar_t* g_driverDescription =
     L"Вывод информации на дисплей покупателя. В качестве дисплея используется "
