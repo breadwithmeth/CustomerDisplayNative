@@ -6,7 +6,7 @@
 'use strict'
 
 // Версия UI — в window, чтобы драйвер мог проверить по probe
-const UI_VERSION = '1.1.3.4'
+const UI_VERSION = '1.1.3.5'
 window.UI_VERSION = UI_VERSION
 
 /* Kiosk-режим: страница открыта драйвером (WebView2) — панель разработчика
@@ -578,9 +578,12 @@ function renderPayment() {
   } else {
     animateNumber(el, state.total)
   }
-  $('payMethod').textContent =
-    state.opText ||
-    (state.method === 'cash' ? 'Оплата наличными' : 'Оплата картой')
+  // подпись — только реальная строка операции из РМК («ОПЛАТА КАРТОЙ» и
+  // т.п.); заглушки «Оплата картой» больше нет — при наличной оплате всё
+  // говорят строки ВНЕСЕНО/СДАЧА
+  const cap = $('payMethod')
+  cap.textContent = state.opText || ''
+  cap.classList.toggle('hidden', !state.opText)
 
   // внесено/сдача при наличной оплате
   const paid = $('payPaid')

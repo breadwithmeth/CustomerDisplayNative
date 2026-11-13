@@ -25,8 +25,13 @@ function fakeEl() {
   });
 }
 
+// элементы по id — стабильные (после render можно читать textContent)
+const elements = new Map();
 const document = {
-  getElementById: () => fakeEl(),
+  getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, fakeEl());
+    return elements.get(id);
+  },
   addEventListener: () => {},
   querySelector: () => fakeEl(),
   querySelectorAll: () => [],
@@ -38,8 +43,10 @@ const location = { search: '?kiosk=1' };
 const appJs = process.argv[2];
 const src = fs.readFileSync(appJs, 'utf8');
 const make = new Function('window', 'document', 'location', 'setInterval', 'setTimeout',
-  'requestAnimationFrame', src + '\nreturn window.__pos;');
-const pos = make(window, document, location, () => 0, () => 0, () => {});
+  'requestAnimationFrame', 'cancelAnimationFrame', 'performance',
+  src + '\nreturn window.__pos;');
+const pos = make(window, document, location, () => 0, () => 0, () => {}, () => {},
+  { now: () => 0 });
 
 let failures = 0;
 function check(cond, msg) {
@@ -135,6 +142,32 @@ check(st.screen === 'WAITING', 'итог без позиций — остаём�
 pos.dispatch({ type: 'check/item', name: 'Молоко' });
 st = pos.getState();
 check(st.totalText === '', 'итог прошлого чека сброшен: ' + JSON.stringify(st.totalText));
+
+// ---- сценарий 8: экран оплаты без заглушки «Оплата картой» ----
+console.log('Сценарий 8: подпись экрана оплаты');
+pos.dispatch({ type: 'check/clear' });
+pos.dispatch({ type: 'check/item', name: 'Майка фирменная' });
+pos.dispatch({ type: 'check/item', name: '30,00 тг.' });
+pos.dispatch({ type: 'check/total', text: 'ИТОГО: 30,00' });
+pos.dispatch({ type: 'op/paid', paid: 'ВНЕСЕНО: 30,00', change: '' });
+pos.dispatch({ type: 'op/change', text: 'СДАЧА: 0.00' });
+st = pos.getState();
+check(st.screen === 'PAYMENT', 'экран оплаты: ' + st.screen);
+check(!document.getElementById('payMethod').textContent,
+  'заглушка «Оплата картой» не показывается: ' +
+  JSON.stringify(document.getElementById('payMethod').textContent));
+check(document.getElementById('payPaid').textContent === 'ВНЕСЕНО: 30,00' &&
+      document.getElementById('payChange').textContent === 'СДАЧА: 0.00',
+  'внесено и сдача на экране');
+// реальная строка операции из РМК по-прежнему показывается
+pos.dispatch({ type: 'op/show', text: 'ОПЛАТА КАРТОЙ' });
+check(document.getElementById('payMethod').textContent === 'ОПЛАТА КАРТОЙ',
+  'текст операции из РМК показывается: ' +
+  JSON.stringify(document.getElementById('payMethod').textContent));
+// и скрывается при следующей оплате наличными
+pos.dispatch({ type: 'op/paid', paid: 'ВНЕСЕНО: 30,00', change: '' });
+check(!document.getElementById('payMethod').textContent,
+  'после наличной оплаты подпись скрыта');
 
 console.log('\nИтог: ' + (failures ? 'ЕСТЬ ОШИБКИ (' + failures + ')' : 'УСПЕХ'));
 process.exit(failures ? 1 : 0);
