@@ -205,21 +205,36 @@ std::vector<std::wstring> ParseDisplayLines(const std::wstring& data)
                 text.erase(p, q - p + 1);
             }
             text = DecodeEntities(text);
-            // разбиение по строкам
+            // разбиение по строкам (\n, \r и \r\n — БПО шлёт ВФД-текст
+            // «наименование\nцена» с любым из вариантов перевода)
             std::wstring cur;
             for (wchar_t c : text) {
-                if (c == L'\n') { lines.push_back(Trim(cur)); cur.clear(); }
-                else if (c != L'\r') cur += c;
+                if (c == L'\n' || c == L'\r') {
+                    std::wstring t = Trim(cur);
+                    if (!t.empty()) lines.push_back(t);
+                    cur.clear();
+                }
+                else cur += c;
             }
-            lines.push_back(Trim(cur));
+            {
+                std::wstring t = Trim(cur);
+                if (!t.empty()) lines.push_back(t);
+            }
         }
         else {
             std::wstring cur;
             for (wchar_t c : data) {
-                if (c == L'\n') { lines.push_back(Trim(cur)); cur.clear(); }
-                else if (c != L'\r') cur += c;
+                if (c == L'\n' || c == L'\r') {
+                    std::wstring t = Trim(cur);
+                    if (!t.empty()) lines.push_back(t);
+                    cur.clear();
+                }
+                else cur += c;
             }
-            lines.push_back(Trim(cur));
+            {
+                std::wstring t = Trim(cur);
+                if (!t.empty()) lines.push_back(t);
+            }
         }
     }
 

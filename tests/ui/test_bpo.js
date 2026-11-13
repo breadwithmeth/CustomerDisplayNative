@@ -97,5 +97,44 @@ pos.dispatch({ type: 'check/item', name: '89,00' });
 st = pos.getState();
 check(st.lines[0] && st.lines[0].sumText === '89,00', 'цена восстановилась: ' + JSON.stringify(st.lines[0] && st.lines[0].sumText));
 
+// ---- сценарий 6: «ВНЕСЕНО: X\rСДАЧА: Y» разрезом (как шлёт РМК) ----
+console.log('Сценарий 6: внесено + сдача отдельной строкой');
+pos.dispatch({ type: 'check/clear' });
+pos.dispatch({ type: 'check/item', name: 'Стакан фирменный одноразовый 0.5' });
+pos.dispatch({ type: 'check/item', name: '50,00 тг.' });
+pos.dispatch({ type: 'check/total', text: 'ИТОГО: 50,00' });
+// драйвер режет строку оплаты: op/paid (сдача пустая) + op/change
+pos.dispatch({ type: 'op/paid', paid: 'ВНЕСЕНО: 50,00', change: '' });
+pos.dispatch({ type: 'op/change', text: 'СДАЧА: 0.00' });
+st = pos.getState();
+check(st.screen === 'PAYMENT', 'экран оплаты: ' + st.screen);
+check(st.lines.length === 1, 'сдача не добавилась позицией (позиций: ' + st.lines.length + ')');
+check(st.paidText === 'ВНЕСЕНО: 50,00' && st.changeText === 'СДАЧА: 0.00',
+  'внесено/сдача: ' + JSON.stringify([st.paidText, st.changeText]));
+
+// ---- сценарий 7: чистка по таймеру после оплаты (reason=paid) ----
+console.log('Сценарий 7: чистка после оплаты и защита нового чека');
+// таймер драйвера сработал через 5 с
+pos.dispatch({ type: 'check/clear', reason: 'paid' });
+st = pos.getState();
+check(st.screen === 'WAITING' && st.lines.length === 0,
+  'чек очищен, экран заставки: ' + st.screen + ', позиций ' + st.lines.length);
+// кассир начал новый чек раньше сработавшего таймера — чистка игнорируется
+pos.dispatch({ type: 'check/item', name: 'Майка фирменная' });
+pos.dispatch({ type: 'check/item', name: '30,00 тг.' });
+pos.dispatch({ type: 'check/clear', reason: 'paid' }); // опоздавшая чистка
+st = pos.getState();
+check(st.lines.length === 1 && st.screen === 'SHOPPING',
+  'новый чек пережил опоздавшую чистку (' + st.screen + ', позиций ' + st.lines.length + ')');
+// повторный итог от РМК без позиций не выталкивает пустой чек
+pos.dispatch({ type: 'check/clear' });
+pos.dispatch({ type: 'check/total', text: 'ИТОГО: 50,00' });
+st = pos.getState();
+check(st.screen === 'WAITING', 'итог без позиций — остаёмся на заставке: ' + st.screen);
+// первый товар нового чека сбрасывает итог прошлого
+pos.dispatch({ type: 'check/item', name: 'Молоко' });
+st = pos.getState();
+check(st.totalText === '', 'итог прошлого чека сброшен: ' + JSON.stringify(st.totalText));
+
 console.log('\nИтог: ' + (failures ? 'ЕСТЬ ОШИБКИ (' + failures + ')' : 'УСПЕХ'));
 process.exit(failures ? 1 : 0);

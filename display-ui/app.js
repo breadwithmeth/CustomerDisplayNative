@@ -6,7 +6,7 @@
 'use strict'
 
 // Версия UI — в window, чтобы драйвер мог проверить по probe
-const UI_VERSION = '1.1.3.3'
+const UI_VERSION = '1.1.3.4'
 window.UI_VERSION = UI_VERSION
 
 /* Kiosk-режим: страница открыта драйвером (WebView2) — панель разработчика
@@ -245,6 +245,11 @@ function applyEvent(event) {
         return
       }
 
+      // первый товар нового чека — итог/скидка прошлого чека больше не актуальны
+      if (state.lines.length === 0) {
+        state.totalText = ''
+        state.discountText = ''
+      }
       state.lines.push({
         id: 'i' + (++itemSeq) + '-' + Date.now(),
         name,
@@ -261,7 +266,9 @@ function applyEvent(event) {
       // при экране оплаты (внесено) остаёмся на PAYMENT, обновляя сумму
       state.totalText = event.text || ''
       state.awaitingPrice = false // итог: пара «имя-цена» закрыта
-      if (state.screen !== 'PAYMENT') state.screen = 'SHOPPING'
+      // итог без позиций (повтор от РМК после оплаты) не вытаскивает
+      // пустой чек на экран — остаёмся на заставке
+      if (state.screen !== 'PAYMENT' && state.lines.length > 0) state.screen = 'SHOPPING'
       break
     }
     case 'message/show': {
@@ -285,6 +292,14 @@ function applyEvent(event) {
       state.awaitingPaidClear = true
       state.method = null
       state.screen = 'PAYMENT'
+      break
+    }
+    case 'op/change': {
+      // «ВНЕСЕНО: X\rСДАЧА: Y» режется драйвером на две строки: сдача
+      // дописывается на экран оплаты отдельным событием
+      state.changeText = event.text || ''
+      state.awaitingPaidClear = true
+      if (state.screen !== 'PAYMENT') state.screen = 'PAYMENT'
       break
     }
     case 'op/show': {

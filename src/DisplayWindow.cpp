@@ -49,7 +49,9 @@ const wchar_t* kWindowTitle = L"Дисплей покупателя"; // заг�
 constexpr UINT WM_APP_SETTINGS = WM_APP + 1;
 constexpr UINT WM_APP_CONTENT  = WM_APP + 2;
 constexpr UINT WM_APP_POS      = WM_APP + 3; // очередь JS-событий интерфейса
-constexpr UINT TIMER_PAID_CLEAR = 2;          // очистка чека после «ВНЕСЕНО»
+constexpr UINT TIMER_PAID_CLEAR = 3;          // очистка чека после «ВНЕСЕНО»
+// (свой id: 2 занят циклом демонстрации — совпадение ловило первый тик
+// демо-таймера в ветку чистки и молча убивало оба)
 
 // Пакет настроек для чужого окна (WM_COPYDATA, работает между процессами):
 // второй экземпляр компоненты настраивает уже открытое окно вместо своего
@@ -749,6 +751,28 @@ std::wstring ExtractUi(const std::wstring& baseDir)
     return ui;
 }
 
+/** Доставка одного JSON-события интерфейсу покупателя + взвод таймера
+ *  чистки чека для op/paid. Зовётся из WM_APP_POS (рабочий ход) и из
+ *  FlushPendingJs (очередь, накопленная до загрузки страницы). */
+void DispatchPosJson(Impl* impl, HWND hwnd, const std::wstring& json)
+{
+    HRESULT hr = impl->wv->PostWebMessageAsJson(json.c_str());
+    // резервный путь: JSON-канал отказал — дублируем через ExecuteScript
+    if (FAILED(hr))
+    {
+        std::wstring js = L"window.__pos&&window.__pos.dispatch(" + json + L");";
+        impl->wv->ExecuteScript(js.c_str(), nullptr);
+        hr = impl->wv->PostWebMessageAsJson(json.c_str());
+    }
+    wchar_t b[128];
+    ::swprintf(b, 128, L"dispatch hr=0x%08X json=%.120s", (unsigned)hr, json.c_str());
+    WvLog(b);
+    // «ВНЕСЕНО» — наличная оплата: через 5 с очищаем чек.
+    // Таймер Win32 (не JS) — работает даже при троттлинге WebView2
+    if (json.find(L"op/paid") != std::wstring::npos)
+        ::SetTimer(hwnd, TIMER_PAID_CLEAR, 5000, nullptr);
+}
+
 void FlushPendingJs(Impl* impl)
 {
     if (!impl->wv)
@@ -757,13 +781,9 @@ void FlushPendingJs(Impl* impl)
     ::EnterCriticalSection(&impl->lock);
     batch.swap(impl->pendingJs);
     ::LeaveCriticalSection(&impl->lock);
+    HWND hwnd = impl->hwnd;
     for (const auto& json : batch)
-    {
-        HRESULT hr = impl->wv->PostWebMessageAsJson(json.c_str());
-        wchar_t b[96];
-        ::swprintf(b, 96, L"flush dispatch hr=0x%08X json=%.60s", (unsigned)hr, json.c_str());
-        WvLog(b);
-    }
+        DispatchPosJson(impl, hwnd, json);
 }
 
 /** Подключение готового контроллера: настройки, хосты, навигация (GUI-поток) */
@@ -1129,12 +1149,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         else if (wParam == TIMER_PAID_CLEAR)
         {
             // «ВНЕСЕНО» — наличная оплата: чистим чек (Win32-таймер работает
-            // даже при троттлинге таймеров WebView2/RDP)
+            // даже при троттлинге таймеров WebView2/RDP). reason=paid — новый
+            // чек в течение 5 с отменяет чистку (guard в app.js)
             ::KillTimer(hwnd, TIMER_PAID_CLEAR);
             if (impl->wvReady && impl->wv)
             {
-                impl->wv->PostWebMessageAsJson(L"{\"type\":\"check/clear\"}");
-                WvLog(L"paid timer: check/clear dispatched");
+                impl->wv->PostWebMessageAsJson(L"{\"type\":\"check/clear\",\"reason\":\"paid\"}");
+                WvLog(L"paid timer: check/clear(paid) dispatched");
+            }
+            else
+            {
+                WvLog(L"paid timer: webview not ready — clear skipped");
             }
         }
         return 0;
@@ -1172,23 +1197,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             batch.swap(impl->pendingJs);
             ::LeaveCriticalSection(&impl->lock);
             for (const auto& json : batch)
-            {
-                HRESULT hr = impl->wv->PostWebMessageAsJson(json.c_str());
-                // резервный путь: JSON-канал отказал — дублируем через ExecuteScript
-                if (FAILED(hr))
-                {
-                    std::wstring js = L"window.__pos&&window.__pos.dispatch(" + json + L");";
-                    impl->wv->ExecuteScript(js.c_str(), nullptr);
-                    hr = impl->wv->PostWebMessageAsJson(json.c_str());
-                }
-                wchar_t b[128];
-                ::swprintf(b, 128, L"dispatch hr=0x%08X json=%.120s", (unsigned)hr, json.c_str());
-                WvLog(b);
-                // «ВНЕСЕНО» — наличная оплата: через 5 с очищаем чек.
-                // Таймер Win32 (не JS) — работает даже при троттлинге WebView2
-                if (json.find(L"op/paid") != std::wstring::npos)
-                    ::SetTimer(hwnd, TIMER_PAID_CLEAR, 5000, nullptr);
-            }
+                DispatchPosJson(impl, hwnd, json);
         }
         return 0;
 

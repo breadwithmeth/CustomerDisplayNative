@@ -70,7 +70,7 @@ std::wstring WcharPtrToWstring(const WCHAR_T* s)
 
 static const wchar_t g_kClassNames[] = L"CustomerDisplay";
 static const wchar_t* g_extensionName = L"CustomerDisplayNative";
-const wchar_t* g_extensionVersion = L"1.1.3.3";
+const wchar_t* g_extensionVersion = L"1.1.3.4";
 static const wchar_t* g_driverName = L"Дисплей покупателя (монитор)";
 static const wchar_t* g_driverDescription =
     L"Вывод информации на дисплей покупателя. В качестве дисплея используется "
@@ -1727,16 +1727,21 @@ bool CustomerDisplay::mStringOutputOnCustomerDisplay(tVariant* retVal, tVariant*
 
     // WebView2-интерфейс: семантика БПО — каждая строка = событие чека.
     // Классификация: приветствие/простой → сброс и заставка; «ИТОГО…» → сумма;
-    // остальное — позиция чека (накапливается).
+    // остальное — позиция чека (накопление).
     // Каждое событие — отдельный короткий ASCII JSON-объект (канал
     // PostWebMessageAsJson принимает их надёжно).
-    if (dev->window->IsWebviewActive())
+    // События строятся всегда: пока страница грузится, они копятся в очереди
+    // окна (pendingJs) и уходят одним пакетом после NavigationCompleted —
+    // гейт по готовности здесь не нужен, иначе строки, пришедшие за первые
+    // секунды загрузки, молча теряются.
     {
         std::vector<std::wstring> events;
         bool idle = false, cancel = false;
         std::wstring message;
         for (const auto& line : lines)
         {
+            if (line.empty())
+                continue; // пустая половинка разреза «имя\rцена» — не событие
             const std::wstring low = ToLowerRu(line);
             if (low.find(L"добро пожаловать") != std::wstring::npos ||
                 low.find(L"касса не работает") != std::wstring::npos ||
@@ -1762,6 +1767,13 @@ bool CustomerDisplay::mStringOutputOnCustomerDisplay(tVariant* retVal, tVariant*
                 }
                 events.push_back(L"{\"type\":\"op/paid\",\"paid\":\"" + JsonEscape(paid) +
                                  L"\",\"change\":\"" + JsonEscape(change) + L"\"}");
+            }
+            else if (low.rfind(L"сдача", 0) == 0 && !events.empty() &&
+                     events.back().find(L"\"type\":\"op/paid\"") != std::wstring::npos)
+            {
+                // «ВНЕСЕНО: X\rСДАЧА: Y» режется на две строки — сдача
+                // дописывается на экран оплаты, а не позицией в чек
+                events.push_back(L"{\"type\":\"op/change\",\"text\":\"" + JsonEscape(line) + L"\"}");
             }
             else if (low.find(L"оплат") != std::wstring::npos)
             {

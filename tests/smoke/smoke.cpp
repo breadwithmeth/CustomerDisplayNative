@@ -163,6 +163,68 @@ static bool ForeignDisplayWindowExists()
     return ctx.found;
 }
 
+// ---- webview.log (UTF-16LE, %TEMP%\CustomerDisplayNative) ----
+static std::wstring WebviewLogPath()
+{
+    wchar_t tempPath[MAX_PATH + 1] = { 0 };
+    ::GetTempPathW(MAX_PATH, tempPath);
+    return std::wstring(tempPath) + L"CustomerDisplayNative\\webview.log";
+}
+
+static size_t WebviewLogSize()
+{
+    HANDLE h = ::CreateFileW(WebviewLogPath().c_str(), GENERIC_READ,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return 0;
+    LARGE_INTEGER size = { 0 };
+    ::GetFileSizeEx(h, &size);
+    ::CloseHandle(h);
+    return (size_t)size.QuadPart;
+}
+
+// подстрока в части webview.log, записанной после fromByte
+static bool WebviewLogContainsFrom(size_t fromByte, const wchar_t* needle)
+{
+    HANDLE h = ::CreateFileW(WebviewLogPath().c_str(), GENERIC_READ,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return false;
+    LARGE_INTEGER size = { 0 };
+    ::GetFileSizeEx(h, &size);
+    if ((size_t)size.QuadPart <= fromByte)
+    {
+        ::CloseHandle(h);
+        return false;
+    }
+    LARGE_INTEGER start = { 0 };
+    start.QuadPart = (LONGLONG)fromByte;
+    ::SetFilePointerEx(h, start, nullptr, FILE_BEGIN);
+    std::vector<char> buf((size_t)size.QuadPart - fromByte + 2, 0);
+    DWORD read = 0;
+    ::ReadFile(h, buf.data(), (DWORD)(buf.size() - 2), &read, nullptr);
+    ::CloseHandle(h);
+    std::wstring w;
+    w.reserve(read / 2);
+    for (DWORD i = 0; i + 1 < read; i += 2)
+        w += (wchar_t)((unsigned char)buf[i] | ((unsigned char)buf[i + 1] << 8));
+    return w.find(needle) != std::wstring::npos;
+}
+
+// ждём появления подстроки в хвосте webview.log (страница WebView2 грузится не мгновенно)
+static bool WaitWebviewLogFrom(size_t fromByte, const wchar_t* needle, int timeoutMs)
+{
+    for (int waited = 0; waited <= timeoutMs; waited += 250)
+    {
+        if (WebviewLogContainsFrom(fromByte, needle))
+            return true;
+        ::Sleep(250);
+    }
+    return false;
+}
+
 int main(int argc, char** argv)
 {
     const char* dllPath = (argc > 1) ? argv[1] : "CustomerDisplayNative_64.dll";
@@ -434,6 +496,42 @@ int main(int argc, char** argv)
             HWND wnd = FindOwnMainWindow();
             CHECK(wnd == nullptr || !::IsWindowVisible(wnd), "окно дисплея закрыто");
         }
+    }
+
+    // --- Наличная оплата: «ВНЕСЕНО\rСДАЧА» и чистка чека по таймеру ---
+    {
+        ::SetEnvironmentVariableW(L"CDN_ALLOW_SECOND_WINDOW", L"1");
+        std::wstring devPay;
+        {
+            tVariant params[3]; memset(params, 0, sizeof(params));
+            SetInStr(&params[1], L"CustomerDisplay");
+            SetInStr(&params[2],
+                L"<Parameters><Parameter Name=\"MonitorIndex\" Value=\"1\"/></Parameters>");
+            bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"ConnectEquipment"), &ret, params, 3);
+            CHECK(ok && TV_BOOL(&ret), "ConnectEquipment (оплата) -> true");
+            devPay = OutStr(&params[0]);
+        }
+
+        size_t mark = WebviewLogSize();
+        tVariant params[2]; memset(params, 0, sizeof(params));
+        SetInStr(&params[0], devPay.c_str());
+        // РМК шлёт строку оплаты с переводом: «ВНЕСЕНО: X\r\nСДАЧА: Y»
+        SetInStr(&params[1], L"ВНЕСЕНО: 50,00\r\nСДАЧА: 0.00");
+        bool ok = comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"StringOutputOnCustomerDisplay"), &ret, params, 2);
+        CHECK(ok && TV_BOOL(&ret), "StringOutput (внесено+сдача) -> true");
+
+        CHECK(WaitWebviewLogFrom(mark, L"\"type\":\"op/paid\"", 12000), "op/paid ушёл в интерфейс");
+        CHECK(WebviewLogContainsFrom(mark, L"\"type\":\"op/change\""), "сдача ушла как op/change (не позицией)");
+        CHECK(!WebviewLogContainsFrom(mark, L"check/item\",\"name\":\"\\u0421\\u0414\\u0410\\u0427\\u0410"),
+              "сдача не ушла позицией в чек");
+        // Win32-таймер чистки срабатывает через 5 с после op/paid
+        CHECK(WaitWebviewLogFrom(mark, L"paid timer: check/clear(paid) dispatched", 15000),
+              "таймер чистки после ВНЕСЕНО сработал");
+
+        tVariant d; memset(&d, 0, sizeof(d));
+        SetInStr(&d, devPay.c_str());
+        comp->CallAsFunc(comp->FindMethod((const WCHAR_T*)L"DisconnectEquipment"), &ret, &d, 1);
+        ::SetEnvironmentVariableW(L"CDN_ALLOW_SECOND_WINDOW", nullptr);
     }
 
     // --- Вывод HTML должен быть отклонён ---
