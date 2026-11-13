@@ -11,7 +11,8 @@ function fakeEl() {
       if (p === 'classList') return (t._cl = t._cl ||
         { add() {}, remove() {}, toggle() {}, contains() { return false; } });
       if (p === 'addEventListener' || p === 'removeEventListener') return () => {};
-      if (p === 'appendChild' || p === 'removeChild' || p === 'insertBefore') return () => {};
+      if (p === 'appendChild' || p === 'removeChild' || p === 'insertBefore' ||
+          p === 'remove' || p === 'replaceWith') return () => {};
       if (p === 'querySelector' || p === 'closest') return () => fakeEl();
       if (p === 'querySelectorAll' || p === 'children' || p === 'childNodes') return [];
       if (p === 'clientWidth') return 1920;
@@ -45,8 +46,18 @@ const src = fs.readFileSync(appJs, 'utf8');
 const make = new Function('window', 'document', 'location', 'setInterval', 'setTimeout',
   'requestAnimationFrame', 'cancelAnimationFrame', 'performance',
   src + '\nreturn window.__pos;');
-const pos = make(window, document, location, () => 0, () => 0, () => {}, () => {},
-  { now: () => 0 });
+
+// отложенные колбэки страницы (setTimeout) — можно «прожечь» по времени
+const pageTimers = [];
+const fireTimers = (elapsedMs) => {
+  const due = pageTimers.filter((t) => t.ms <= elapsedMs);
+  pageTimers.length = 0;
+  for (const t of due) t.fn();
+};
+
+const pos = make(window, document, location, () => 0,
+  (fn, ms) => { pageTimers.push({ fn, ms }); return pageTimers.length; },
+  () => {}, () => {}, { now: () => 0 });
 
 let failures = 0;
 function check(cond, msg) {
@@ -168,6 +179,33 @@ check(document.getElementById('payMethod').textContent === 'ОПЛАТА КАР�
 pos.dispatch({ type: 'op/paid', paid: 'ВНЕСЕНО: 30,00', change: '' });
 check(!document.getElementById('payMethod').textContent,
   'после наличной оплаты подпись скрыта');
+
+// ---- сценарий 9: самостоятельный переход в рекламу после оплаты ----
+console.log('Сценарий 9: переход в рекламу без таймера драйвера');
+pos.dispatch({ type: 'check/clear' });
+pos.dispatch({ type: 'check/item', name: 'Майка фирменная' });
+pos.dispatch({ type: 'check/item', name: '30,00 тг.' });
+pos.dispatch({ type: 'check/total', text: 'ИТОГО: 30,00' });
+pos.dispatch({ type: 'op/paid', paid: 'ВНЕСЕНО: 30,00', change: '' });
+pos.dispatch({ type: 'op/change', text: 'СДАЧА: 0.00' });
+st = pos.getState();
+check(st.screen === 'PAYMENT', 'экран оплаты: ' + st.screen);
+fireTimers(5000); // прошло 5 с — JS-таймер страницы (таймер драйвера потерялся)
+st = pos.getState();
+check(st.screen === 'WAITING' && st.lines.length === 0,
+  'сами ушли в полноэкранную рекламу: ' + st.screen + ', позиций ' + st.lines.length);
+// новый чек до истечения 5 с отменяет собственный переход
+pos.dispatch({ type: 'check/clear' });
+pos.dispatch({ type: 'check/item', name: 'Молоко' });
+pos.dispatch({ type: 'check/item', name: '89,00' });
+pos.dispatch({ type: 'check/total', text: 'ИТОГО: 89,00' });
+pos.dispatch({ type: 'op/paid', paid: 'ВНЕСЕНО: 89,00', change: '' });
+pos.dispatch({ type: 'check/item', name: 'Хлеб' }); // кассир начал новый чек
+fireTimers(5000);                                     // таймер платы сработал
+st = pos.getState();
+check(st.screen === 'SHOPPING' && st.lines.length === 2,
+  'новый чек пережил собственный таймер перехода: ' + st.screen +
+  ', позиций ' + st.lines.length);
 
 console.log('\nИтог: ' + (failures ? 'ЕСТЬ ОШИБКИ (' + failures + ')' : 'УСПЕХ'));
 process.exit(failures ? 1 : 0);

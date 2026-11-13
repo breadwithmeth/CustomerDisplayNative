@@ -6,7 +6,7 @@
 'use strict'
 
 // Версия UI — в window, чтобы драйвер мог проверить по probe
-const UI_VERSION = '1.1.3.5'
+const UI_VERSION = '1.1.3.6'
 window.UI_VERSION = UI_VERSION
 
 /* Kiosk-режим: страница открыта драйвером (WebView2) — панель разработчика
@@ -96,6 +96,29 @@ function describeEvent(e) {
   if (e.type === 'line/upsert') return `line/upsert  ${e.line.name}`
   if (e.type === 'line/remove') return `line/remove  ${e.id}`
   return e.type
+}
+
+/* После «ВНЕСЕНО» показываем сдачу ~5 с и уходим в полноэкранную рекламу.
+   Дублирует Win32-таймер драйвера (check/clear reason=paid): если его
+   сообщение потерялось или страница троттлится — переходим сами.
+   Новый чек до истечения таймера отменяет переход (awaitingPaidClear). */
+let paidTransitionToken = 0
+function schedulePaidTransition() {
+  const token = ++paidTransitionToken
+  setTimeout(() => {
+    if (token !== paidTransitionToken) return   // перезапланирован новой оплатой
+    if (!state.awaitingPaidClear) return        // начали пробиваться новый чек
+    state.awaitingPaidClear = false
+    state.lines = []
+    state.total = 0
+    state.totalText = ''
+    state.discountText = ''
+    state.lastTouchedId = null
+    state.awaitingPrice = false
+    state.screen = 'WAITING'
+    pushLog('◉ оплачено → реклама')
+    render()
+  }, 5000)
 }
 
 function applyEvent(event) {
@@ -286,12 +309,14 @@ function applyEvent(event) {
     }
     case 'op/paid': {
       // наличная оплата: крупные «ВНЕСЕНО» / «СДАЧА»; чистку делает драйвер
+      // (Win32-таймер) и дублем — собственный переход в рекламу
       state.opText = ''
       state.paidText = event.paid || ''
       state.changeText = event.change || ''
       state.awaitingPaidClear = true
       state.method = null
       state.screen = 'PAYMENT'
+      schedulePaidTransition()
       break
     }
     case 'op/change': {
@@ -300,6 +325,7 @@ function applyEvent(event) {
       state.changeText = event.text || ''
       state.awaitingPaidClear = true
       if (state.screen !== 'PAYMENT') state.screen = 'PAYMENT'
+      schedulePaidTransition()
       break
     }
     case 'op/show': {

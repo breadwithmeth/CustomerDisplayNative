@@ -1443,9 +1443,16 @@ bool DisplayWindow::IsRunning() const
 {
     Impl* impl = m_impl;
     ::EnterCriticalSection(&impl->lock);
-    bool running = impl->thread != nullptr && impl->hwnd != nullptr;
+    HANDLE h = impl->thread;
+    HWND hwnd = impl->hwnd;
     ::LeaveCriticalSection(&impl->lock);
-    return running;
+    if (!h || !hwnd)
+        return false;
+    // поток мог аварийно завершиться, не прибрав окно (хендл остался,
+    // hwnd не сброшен) — такой «зависший» экран распознаём и переоткрываем
+    if (::WaitForSingleObject(h, 0) == WAIT_OBJECT_0)
+        return false;
+    return true;
 }
 
 bool DisplayWindow::ApplySettings(const DisplaySettings& settings)
